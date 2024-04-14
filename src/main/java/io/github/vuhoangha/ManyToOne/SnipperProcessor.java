@@ -23,15 +23,15 @@ public class SnipperProcessor implements Runnable {
     private final Sequencer _sequencer;
     private final Sequence _sequence = new Sequence(Sequencer.INITIAL_CURSOR_VALUE);
     private volatile boolean _running = true;
-    private ZContext _zContext;
-    private String _socket_url;
+    private final ZContext _zContext;
+    private final String _socket_url;
     // dùng để serialize data gửi sang Collector
     private final Bytes<ByteBuffer> _bytes_req = Bytes.elasticByteBuffer();
     private final Wire _wire_req = WireType.BINARY.apply(_bytes_req);
     // map id của item với thời gian tối đa nó chờ bên Collector xác nhận
-    private ConcurrentNavigableMap<Long, Long> _map_item_with_time;
+    private final ConcurrentNavigableMap<Long, Long> _map_item_with_time;
     // map id của item với callback để call lại khi cần
-    private ConcurrentHashMap<Long, CompletableFuture<Boolean>> _map_item_with_callback;
+    private final ConcurrentHashMap<Long, CompletableFuture<Boolean>> _map_item_with_callback;
     // bao lâu quét check timeout 1 lần
     private final long _time_out_interval_ms = 1000;
 
@@ -81,7 +81,7 @@ public class SnipperProcessor implements Runnable {
         while (_running) {
 
             // xem có msg nào cần gửi đi ko
-            availableSequence = _sequencer.getHighestPublishedSequence(nextSequence, _ring_buffer.getCursor());     // lấy sequence cuối cùng trong ring_buffer
+            availableSequence = _sequencer.getHighestPublishedSequence(nextSequence, _ring_buffer.getCursor());     // lấy sequence được publish cuối cùng trong ring_buffer
             if (nextSequence <= availableSequence) {
                 while (nextSequence <= availableSequence) {
                     newEvent = _ring_buffer.get(nextSequence);

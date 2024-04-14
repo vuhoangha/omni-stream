@@ -164,7 +164,7 @@ public class Collector<T extends SelfDescribingMarshallable> {
                 bytes.clear();
                 wire.clear();
             } else {
-                /**
+                /*
                  * ở đây có 2 option
                  *      Thread.yield(): nhường CPU cho thread khác thực thi. Nếu ko có thread nào thì lại chạy tiếp Thread.yield()
                  *      LockSupport.parkNanos(1): cho CPU nghỉ ngơi 1 nanoseconds.
@@ -174,7 +174,7 @@ public class Collector<T extends SelfDescribingMarshallable> {
                  *          Nếu thời gian nhỏ quá, điều này có thể phản tác dụng vì CPU ko nghỉ được nhiều mà còn tốn thêm thời gian lập lịch cho Thread này
                  *          Tham khảo: https://hazelcast.com/blog/locksupport-parknanos-under-the-hood-and-the-curious-case-of-parking/
                  */
-                LockSupport.parkNanos(1);   // nghỉ 5ms
+                LockSupport.parkNanos(1);
             }
         }
 
@@ -197,7 +197,7 @@ public class Collector<T extends SelfDescribingMarshallable> {
     private void _onShutdown() {
         _status = STOPPED;
 
-        // chờ 2s cho các hành động xử lý nốt
+        // chờ các hành động xử lý nốt
         LockSupport.parkNanos(1_000_000_000);
 
         _queue.close();

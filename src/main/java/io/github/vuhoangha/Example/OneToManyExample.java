@@ -7,8 +7,8 @@ import java.util.concurrent.locks.LockSupport;
 public class OneToManyExample {
 
 
-    public static String sourcePath = "/Users/vuhoangha/Desktop/chronicle-queue-data/source";
-    public static String sinkPath = "/Users/vuhoangha/Desktop/chronicle-queue-data/sink";
+    public static String sourcePath = "xxx";
+    public static String sinkPath = "yyy";
 
 
     public static void run() {

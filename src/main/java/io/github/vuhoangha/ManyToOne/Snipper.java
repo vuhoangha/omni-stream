@@ -129,7 +129,7 @@ public class Snipper<T extends SelfDescribingMarshallable> {
         // disruptor
         _disruptor_send_msg.shutdown();
         _processor.halt();                      // stop processor
-        LockSupport.parkNanos(1_000_000_000);   // ngừng 2s để xử lý nốt msg trong ring buffer
+        LockSupport.parkNanos(1_000_000_000);   // tạm ngừng để xử lý nốt msg trong ring buffer
 
         // zmq
         _zmq_context.destroy();

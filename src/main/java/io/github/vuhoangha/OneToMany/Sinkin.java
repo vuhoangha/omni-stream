@@ -136,7 +136,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         if (cfg.getRingBufferSize() == null)
             cfg.setRingBufferSize(2 << 16);     // 131072
         if (cfg.getRollCycles() == null)
-            cfg.setRollCycles(LargeRollCycles.LARGE_DAILY);     // 131072
+            cfg.setRollCycles(LargeRollCycles.LARGE_DAILY);
 
 
         this._dataType = dataType;

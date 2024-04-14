@@ -15,7 +15,7 @@ public class ManyToOneExample {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ManyToOneExample.class);
 
-    public static String collectorPath = "/Users/vuhoangha/Desktop/chronicle-queue-data/collector";
+    public static String collectorPath = "xxx";
     public static int numberItem = 100000;
 
     public static void run(){
@@ -33,7 +33,7 @@ public class ManyToOneExample {
             Collector<PeopleTest> collector = new Collector<>(
                     CollectorCfg.builder()
                             .setQueuePath(collectorPath)
-                            .setReaderName("exchange-core-collector"),
+                            .setReaderName("reader_name"),
                     PeopleTest.class,
                     (people, index) -> {
                         itemReceivedCount.incrementAndGet();

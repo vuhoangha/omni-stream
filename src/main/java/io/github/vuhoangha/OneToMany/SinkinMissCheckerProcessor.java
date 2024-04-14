@@ -27,7 +27,7 @@ public class SinkinMissCheckerProcessor implements EventProcessor {
     private final RingBuffer<CheckMissMsg> ringBuffer;
     private final Sequence sequence = new Sequence(Sequencer.INITIAL_CURSOR_VALUE);     // quản lý số thứ tự trong processor
 
-    /**
+    /*
      * dùng để lấy seq mới
      * check xem processor còn hoạt động không
      * nó sử dụng WaitStrategy như lúc ta thiết lập Disruptor bên ngoài

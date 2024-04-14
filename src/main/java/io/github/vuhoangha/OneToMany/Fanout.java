@@ -261,7 +261,7 @@ public class Fanout<T extends SelfDescribingMarshallable> {
                 _byte_stream_queue.clear();
                 _byte_zmq_pub.clear();
             } else {
-                /**
+                /*
                  * ở đây có 2 option
                  *      Thread.yield(): nhường CPU cho thread khác thực thi. Nếu ko có thread nào thì lại chạy tiếp Thread.yield()
                  *      LockSupport.parkNanos(1): cho CPU nghỉ ngơi 1 nanoseconds.
@@ -271,7 +271,7 @@ public class Fanout<T extends SelfDescribingMarshallable> {
                  *          Nếu thời gian nhỏ quá, điều này có thể phản tác dụng vì CPU ko nghỉ được nhiều mà còn tốn thêm thời gian lập lịch cho Thread này
                  *          Tham khảo: https://hazelcast.com/blog/locksupport-parknanos-under-the-hood-and-the-curious-case-of-parking/
                  */
-                LockSupport.parkNanos(1);   // nghỉ 5ms
+                LockSupport.parkNanos(1);
             }
         }
 
@@ -398,12 +398,12 @@ public class Fanout<T extends SelfDescribingMarshallable> {
         // hệ thống chuẩn bị ngừng chạy
         _status = STOPPED;
 
-        /**
+        /*
          * ngừng nhận msg mới
          * disruptor sẽ xử lý nốt các msg nằm trong ring buffer
          */
         _disruptor.shutdown();
-        LockSupport.parkNanos(1_000_000_000);  // chờ 2s để xử lý nốt msg
+        LockSupport.parkNanos(1_000_000_000);  // chờ để xử lý nốt msg
 
         // chronicle queue sẽ đóng và lưu lại dữ liệu vào disk
         _appender.close();
