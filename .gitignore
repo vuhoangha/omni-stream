@@ -3,7 +3,7 @@ target/
 !**/src/main/**/target/
 !**/src/test/**/target/
 
-/log
+/log/
 
 ### IntelliJ IDEA ###
 .idea/modules.xml

@@ -8,7 +8,7 @@ public class OneToManyExample {
 
 
     public static String sourcePath = "xxx";
-    public static String sinkPath = "yyy";
+    public static String sinkPath = "zzz";
 
 
     public static void run() {
@@ -20,7 +20,7 @@ public class OneToManyExample {
 
     public static void runSink() {
         SinkinHandler<PeopleTest> handler = (byte version, PeopleTest data, long seq, long id) -> {
-            System.out.println("\n");
+            System.out.println("\uD83D\uDCE9Received");
             System.out.println("Version: " + version);
             System.out.println("People: " + data.toString());
             System.out.println("Seq: " + seq);
@@ -51,8 +51,8 @@ public class OneToManyExample {
                 count++;
                 people.setIndex(count);
                 people.setName("people " + count);
+                System.out.println("\n\uD83D\uDE80Send: " + people);
                 fanout.write(people);
-                System.out.println("\nSend: " + people);
 
                 LockSupport.parkNanos(2_000_000_000L);
             }
