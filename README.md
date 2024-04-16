@@ -7,6 +7,29 @@ network. Inspired by the seamless flow of the river and the all-encompassing jou
 OmniStream offers a robust solution for real-time data streaming and synchronization with an emphasis on simplicity and
 integrity.
 
+### Installation
+
+To include OmniStream in your project, add the following dependency to your project's build file:
+
+#### Maven
+
+```xml
+
+<dependency>
+    <groupId>io.github.vuhoangha</groupId>
+    <artifactId>omni-stream</artifactId>
+    <version>1.0.2</version>
+</dependency>
+```
+
+#### Gradle
+
+```groovy
+dependencies {
+    implementation 'io.github.vuhoangha:omni-stream:1.0.2'
+}
+```
+
 ## Features
 
 - **High Throughput**: Utilizes Chronicle Queue, LMAX Disruptor, and ZeroMQ to ensure high-speed data processing and low
@@ -78,29 +101,6 @@ export MAVEN_OPTS="--add-exports java.base/jdk.internal.ref=ALL-UNNAMED \
 
 Although only a subset of the above command line options is required for Java 11, we recommend applying the same
 parameters to Java 11 as to Java 17 to eliminate certain warnings that may appear in output logs.
-
-### Installation
-
-To include OmniStream in your project, add the following dependency to your project's build file:
-
-#### Maven
-
-```xml
-
-<dependency>
-    <groupId>io.github.vuhoangha</groupId>
-    <artifactId>omni-stream</artifactId>
-    <version>1.0.1</version>
-</dependency>
-```
-
-#### Gradle
-
-```groovy
-dependencies {
-    implementation 'io.github.vuhoangha:omni-stream:1.0.1'
-}
-```
 
 ### Quick Start
 
