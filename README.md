@@ -274,28 +274,28 @@ This pattern provides a robust solution for synchronizing a queue from one host 
 
 ##### Components
 
-###### Fanout Pattern
+##### Fanout Pattern
 The Fanout class is responsible for distributing data across multiple hosts. It operates as follows:
 
 - **Data Input**: Threads from the main application send data to an Lmax Disruptor, which acts as a high-performance, inter-thread messaging library.
 - **Data Storage**: The Disruptor writes this data into a Chronicle Queue, a low-latency, high-throughput, persisted queue.
 - **Data Distribution**: A dedicated processor listens for new messages written to the Chronicle Queue and forwards them via ZeroMQ to other hosts (Sinkin) for synchronization.
 
-###### Sinkin Pattern
+##### Sinkin Pattern
 The Sinkin class handles receiving messages from the Fanout host and ensures they are processed correctly:
 
 - **Data Subscription**: Uses ZeroMQ to subscribe to new messages sent by the Fanout.
 - **Data Recording**: Records these messages into a Chronicle Queue on the local host.
 - **Data Processing**: A processor listens for new messages added to the local queue and forwards them to the application for further processing.
 
-###### Data Integrity and Synchronization
+##### Data Integrity and Synchronization
 
 - **Message Delivery**: While the pub/sub model facilitates real-time data distribution, message loss can occur under certain conditions.
 - **Reliability Mechanism**: To address potential data loss, an additional ZeroMQ Req/Rep mechanism is implemented. This mechanism checks for any missed messages and synchronizes them accordingly, ensuring complete data integrity across all hosts.
 
 ##### Configuration
 
-###### Fanout Config
+##### Fanout Config
 - `queuePath *`
   > Configures the directory that will contain the queue data on disk.
   > Example: `/var/lib/yourapp/queue`
@@ -334,7 +334,7 @@ The Sinkin class handles receiving messages from the Fanout host and ensures the
   > Default: `LargeRollCycles.LARGE_DAILY` (daily rollover)
   > More info: [Chronicle Queue FAQ](https://github.com/OpenHFT/Chronicle-Queue/blob/ea/docs/FAQ.adoc#how-to-change-the-time-that-chronicle-queue-rolls)
 
-###### Sinkin Config
+##### Sinkin Config
 - `queuePath *`
   > Specifies the directory that will contain the queue data on disk.
   > Example: `/var/lib/yourapp/queue`
@@ -400,20 +400,20 @@ This pattern designed to streamline the process of aggregating messages from mul
 
 ##### Components
 
-###### Snipper Pattern
+##### Snipper Pattern
 The Snipper class is tasked with capturing and forwarding data from various sources. Its operations are as follows:
 
 - **Data Input**: Threads from the main application send data to an Lmax Disruptor, which serves as a high-performance inter-thread messaging platform.
 - **Data Transmission**: The Disruptor sends this data to the Collector host via ZeroMQ.
 
-###### Collector Pattern
+##### Collector Pattern
 The Collector class handles the centralized collection and processing of messages:
 
 - **Data Reception**: Utilizes ZeroMQ to listen for incoming messages from Snippers.
 - **Data Recording**: Upon receiving messages, they are recorded into a Chronicle Queue on the Collector host.
 - **Data Processing**: A dedicated processor listens for new messages in the queue and forwards them to the application for further processing.
 
-###### Message Delivery and Integrity
+##### Message Delivery and Integrity
 
 - **Acknowledgment Mechanism**: The communication between Snippers and the Collector includes an acknowledgment (ACK) protocol. The Collector, upon receiving a message, notifies the respective Snipper, confirming receipt.
 - **Loss Handling**: In case of a message timeout or failure, the Snipper marks the message as undelivered, allowing for corrective actions to be taken.
@@ -421,7 +421,7 @@ The Collector class handles the centralized collection and processing of message
 
 ##### Configuration
 
-###### Collector Config
+##### Collector Config
 - `queuePath *`
   > Path to the folder containing queue data.
   > Example: `/var/lib/yourapp/queue`
@@ -438,7 +438,7 @@ The Collector class handles the centralized collection and processing of message
   > Starting index from which the queue will be read. If set to `-1`, the reading will begin from the start of the queue.
 
 
-###### Snipper Config
+##### Snipper Config
 - `collectorIP *`
   > IP address of the Collector host to which the Snipper sends data.
 
