@@ -50,10 +50,10 @@ public class Snipper<T extends SelfDescribingMarshallable> {
         // validate
         if (cfg.getCollectorIP() == null)
             throw new Exception("Require collectorIP");
-        if (cfg.getPort() == null)
-            throw new Exception("Require port");
 
         // set default value
+        if (cfg.getPort() == null)
+            cfg.setPort(5557);
         if (cfg.getTimeout() == null)
             cfg.setTimeout(10000);
         if (cfg.getWaitStrategy() == null)

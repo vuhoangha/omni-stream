@@ -6,19 +6,19 @@ import java.text.MessageFormat;
 
 public class SnipperCfg {
 
-    // timeout gửi nhận msg
-    private Integer timeout;
-
-    // kiểu WaitStrategy được sử dụng để gom msg từ nhiều thread để gửi qua ZMQ
-    private WaitStrategy waitStrategy;
-
     // IP của Collector
     private String collectorIP;
+
+    // timeout gửi nhận message
+    private Integer timeout;
+
+    // kiểu WaitStrategy được sử dụng để gom message từ nhiều thread để dùng ZeroMQ gửi qua Collector
+    private WaitStrategy waitStrategy;
 
     // port mà Collector lắng nghe
     private Integer port;
 
-    // kích cỡ ring buffer của disruptor gửi/nhận msg. Phải là dạng 2^n
+    // kích cỡ ring buffer của disruptor gửi/nhận message. Phải là dạng 2^n
     private Integer ringBufferSize;
 
 

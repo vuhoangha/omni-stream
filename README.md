@@ -266,9 +266,200 @@ public class ManyToOneExample {
 ```
 
 ### How does it work?
+#### Fanout / Sinkin (One to Many)
 ![Diagram](https://github.com/vuhoangha/kendrick-store-public/blob/main/Fanout_sinkin.png?raw=true)
+
+##### Overview
+This pattern provides a robust solution for synchronizing a queue from one host (Fanout) to multiple other hosts (Sinkin) using the Fanout/Sinkin pattern. It guarantees the order of queue items and ensures exact replication across hosts.
+
+##### Components
+
+###### Fanout Pattern
+The Fanout class is responsible for distributing data across multiple hosts. It operates as follows:
+
+- **Data Input**: Threads from the main application send data to an Lmax Disruptor, which acts as a high-performance, inter-thread messaging library.
+- **Data Storage**: The Disruptor writes this data into a Chronicle Queue, a low-latency, high-throughput, persisted queue.
+- **Data Distribution**: A dedicated processor listens for new messages written to the Chronicle Queue and forwards them via ZeroMQ to other hosts (Sinkin) for synchronization.
+
+###### Sinkin Pattern
+The Sinkin class handles receiving messages from the Fanout host and ensures they are processed correctly:
+
+- **Data Subscription**: Uses ZeroMQ to subscribe to new messages sent by the Fanout.
+- **Data Recording**: Records these messages into a Chronicle Queue on the local host.
+- **Data Processing**: A processor listens for new messages added to the local queue and forwards them to the application for further processing.
+
+###### Data Integrity and Synchronization
+
+- **Message Delivery**: While the pub/sub model facilitates real-time data distribution, message loss can occur under certain conditions.
+- **Reliability Mechanism**: To address potential data loss, an additional ZeroMQ Req/Rep mechanism is implemented. This mechanism checks for any missed messages and synchronizes them accordingly, ensuring complete data integrity across all hosts.
+
+##### Configuration
+
+###### Fanout Config
+- `queuePath *`
+  > Configures the directory that will contain the queue data on disk.
+  > Example: `/var/lib/yourapp/queue`
+
+- `realtimePort`
+  > Port used by ZeroMQ to listen for connections for publishing/subscribing to new messages.
+  > Default: `5555`
+
+- `confirmPort`
+  > Port used by ZeroMQ to listen for connections to retrieve missed messages.
+  > Default: `5556`
+
+- `numberMsgInBatch`
+  > Specifies the maximum number of messages sent in one request when a Sinkin starts. This setting balances the number of requests with potential data transmission interruptions.
+  > Default: `10,000`
+
+- `waitStrategy`
+  > The wait strategy of the Lmax Disruptor for batching messages from multiple threads. Consider the trade-off between latency and CPU performance based on your usage needs.
+  > Default: `BlockingWaitStrategy`
+  > More info: [Lmax Disruptor User Guide](https://lmax-exchange.github.io/disruptor/user-guide/index.html)
+
+- `ringBufferSize`
+  > Size of the Lmax Disruptor's Ring Buffer for sending/receiving messages. Must be a power of two.
+  > Default: `131,072`
+
+- `maxNumberMsgInCachePub`
+  > Maximum number of messages in the ZeroMQ publisher's cache.
+  > Default: `1,000,000`
+
+- `version`
+  > Version identifier for the messages currently in the queue, used for future checks and validations.
+  > Default: `-128`
+
+- `rollCycles`
+  > Frequency at which the Chronicle Queue rolls over from an old file to a new file.
+  > Default: `LargeRollCycles.LARGE_DAILY` (daily rollover)
+  > More info: [Chronicle Queue FAQ](https://github.com/OpenHFT/Chronicle-Queue/blob/ea/docs/FAQ.adoc#how-to-change-the-time-that-chronicle-queue-rolls)
+
+###### Sinkin Config
+- `queuePath *`
+  > Specifies the directory that will contain the queue data on disk.
+  > Example: `/var/lib/yourapp/queue`
+
+- `sourceIP *`
+  > IP address of the Fanout host from which the Sinkin receives data.
+
+- `realtimePort`
+  > Port used by the Fanout to publish data to the Sinkins.
+  > Default: `5555`
+
+- `confirmPort`
+  > Port used by the Fanout to respond to requests for retrieving missed messages from Sinkins.
+  > Default: `5556`
+
+- `maxTimeWaitMS`
+  > Maximum time a message can stay in the queue before it is considered as missing preceding messages, prompting a request to the Fanout to retrieve them.
+  > Default: `1000` ms
+
+- `maxObjectsPoolWait`
+  > Maximum number of messages in the ObjectsPool waiting to be processed.
+  > Default: `30,000`
+
+- `zmqSubBufferSize`
+  > Maximum size of the ZeroMQ SUB buffer for pending messages.
+  > Default: `1,000,000`
+
+- `timeRateGetLatestMsgMS`
+  > Frequency in milliseconds to fetch the latest messages from the Fanout.
+  > Default: `3000` ms
+
+- `timeRateGetMissMsgMS`
+  > Frequency in milliseconds to check and retrieve missing messages.
+  > Default: `3000` ms
+
+- `timeoutSendReqMissMsg`
+  > Timeout for sending requests to retrieve missing messages from the Fanout.
+  > Default: `5000` ms
+
+- `timeoutRecvReqMissMsg`
+  > Timeout for receiving responses for missing messages from the Fanout.
+  > Default: `5000` ms
+
+- `waitStrategy`
+  > The wait strategy used by Lmax Disruptor for batching and processing messages.
+  > Default: `BlockingWaitStrategy`
+  > More info: [Lmax Disruptor User Guide](https://lmax-exchange.github.io/disruptor/user-guide/index.html)
+
+- `ringBufferSize`
+  > Size of the Disruptor's ring buffer for message processing. Must be a power of two.
+  > Default: `131,072`
+
+- `rollCycles`
+  > Period for rolling over from an old file to a new file in the queue. The `LargeRollCycles.LARGE_DAILY` setting provides a balance between indexing and file management.
+  > Default: `LargeRollCycles.LARGE_DAILY`
+  > More info: [Chronicle Queue FAQ](https://github.com/OpenHFT/Chronicle-Queue/blob/ea/docs/FAQ.adoc#how-to-change-the-time-that-chronicle-queue-rolls)
+  
+#### Snipper / Collector (Many to One)
 ![Diagram](https://github.com/vuhoangha/kendrick-store-public/blob/main/Snipper_collector.png?raw=true)
 
+##### Overview
+This pattern designed to streamline the process of aggregating messages from multiple hosts into a single Collector host. It ensures efficient and reliable message delivery into a central queue for processing.
+
+##### Components
+
+###### Snipper Pattern
+The Snipper class is tasked with capturing and forwarding data from various sources. Its operations are as follows:
+
+- **Data Input**: Threads from the main application send data to an Lmax Disruptor, which serves as a high-performance inter-thread messaging platform.
+- **Data Transmission**: The Disruptor sends this data to the Collector host via ZeroMQ.
+
+###### Collector Pattern
+The Collector class handles the centralized collection and processing of messages:
+
+- **Data Reception**: Utilizes ZeroMQ to listen for incoming messages from Snippers.
+- **Data Recording**: Upon receiving messages, they are recorded into a Chronicle Queue on the Collector host.
+- **Data Processing**: A dedicated processor listens for new messages in the queue and forwards them to the application for further processing.
+
+###### Message Delivery and Integrity
+
+- **Acknowledgment Mechanism**: The communication between Snippers and the Collector includes an acknowledgment (ACK) protocol. The Collector, upon receiving a message, notifies the respective Snipper, confirming receipt.
+- **Loss Handling**: In case of a message timeout or failure, the Snipper marks the message as undelivered, allowing for corrective actions to be taken.
+- **Data Replay**: The Collector can perform data replays from past records, enabling recovery and continuity in case of disruptions.
+
+##### Configuration
+
+###### Collector Config
+- `queuePath *`
+  > Path to the folder containing queue data.
+  > Example: `/var/lib/yourapp/queue`
+
+- `port`
+  > Port that the Collector listens on to receive requests from the Snipper.
+  > Default: `5557`
+
+- `readerName *`
+  > Name used as an ID for the reader. This name allows the Collector to continue reading from the last position in the queue after a restart, rather than starting over from the beginning.
+  > Example: `defaultReader`
+
+- `startId`
+  > Starting index from which the queue will be read. If set to `-1`, the reading will begin from the start of the queue.
+
+
+###### Snipper Config
+- `collectorIP *`
+  > IP address of the Collector host to which the Snipper sends data.
+
+- `timeout`
+  > Timeout for sending and receiving messages.
+  > Default: `10,000` ms
+
+- `waitStrategy`
+  > The wait strategy used by Lmax Disruptor to batch messages from multiple threads before sending them via ZeroMQ to the Collector. This setting balances throughput and system responsiveness.
+  > Default: `BlockingWaitStrategy`
+  > More info: [Lmax Disruptor User Guide](https://lmax-exchange.github.io/disruptor/user-guide/index.html)
+
+- `port`
+  > Port that the Collector listens on to receive messages from the Snipper.
+  > Default: `5557`
+
+- `ringBufferSize`
+  > Size of the Disruptor's ring buffer for sending/receiving messages. Must be a power of two to ensure efficient data handling.
+  > Default: `131,072`
+
+  
 ## Documentation
 
 For detailed documentation, examples, and API references, please
@@ -290,4 +481,4 @@ OmniStream is released under the MIT License. See the [LICENSE](LICENSE) file fo
 
 ---
 
-For support, contact [support@omnistream.com](mailto:support@omnistream.com).
+For support, contact [vuhoangha100995@gmail.com](mailto:vuhoangha100995@gmail.com).

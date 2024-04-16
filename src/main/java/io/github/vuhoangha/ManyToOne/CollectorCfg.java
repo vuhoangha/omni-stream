@@ -7,15 +7,17 @@ import java.text.MessageFormat;
 public class CollectorCfg {
 
     // đường dẫn tới folder chứa dữ liệu
+    // required
     private String queuePath;
 
-    // port mà Collector lắng nghe các req của Snipper
+    // port mà Collector lắng nghe các request của Snipper
     private Integer port;
 
-    // tên của người đọc. Nó sẽ dùng làm ID để sau khi restart, ta sẽ tiếp tục đọc trong queue chứ ko phải đọc từ đầu
+    // tên của người đọc. Nó sẽ dùng làm ID để sau khi restart, ta sẽ tiếp tục đọc từ vị trí cũ trong queue chứ ko phải đọc từ đầu
+    // required
     private String readerName;
 
-    // bắt đầu đọc queue từ index nào. Nếu bằng "-1" thì nó sẽ đọc lại từ đầu
+    // bắt đầu đọc queue từ index nào. Nếu bằng "-1" thì nó sẽ đọc từ đầu
     private Long startId;
 
     /*

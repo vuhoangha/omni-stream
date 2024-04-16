@@ -10,40 +10,41 @@ public class SinkinCfg {
     // folder chứa data của queue
     private String queuePath;
 
-    // IP của source
+    // IP của Fanout host
     private String sourceIP;
 
-    // port của socket publish msg sang sink
+    // port của Fanout dùng để publish dữ liệu cho các Sinkin
     private Integer realtimePort;
 
-    // port của socket để sink call sang src
+    // port của Fanout dùng để response các yêu cầu lấy message bị miss của Sinkin
     private Integer confirmPort;
 
-    // 1 msg ở trong hàng chờ lâu hơn config này sẽ được lấy các msg thiếu ở giữa ["index được xử lý gần nhất", "msg có seq thấp nhất đang chờ xử lý"]
+    // 1 msg ở trong hàng chờ quá lâu thì sẽ bị coi là thiếu các message trước nó, Sinkin sẽ request sang Fanout để lấy các message đó
     private Integer maxTimeWaitMS;
 
-    // số lượng msg tối đa trong ObjectsPool dùng cho việc chứa lại các msg chờ xử lý
+    // số lượng msg tối đa trong ObjectsPool dùng để chứa lại các message chờ xử lý
     private Integer maxObjectsPoolWait;
 
-    // kích cỡ tối đa bộ đệm socket SUB chờ được xử lý (số lượng msg)
+    // kích cỡ tối đa bộ đệm ZeroMQ SUB chờ được xử lý (số lượng message)
     private Integer zmqSubBufferSize;
 
-    // thời gian định kỳ lấy msg mới nhất từ src (miliseconds)
+    // thời gian định kỳ lấy message mới nhất từ Fanout (miliseconds)
     private Integer timeRateGetLatestMsgMS;
 
-    // thời gian định kỳ check và lấy các msg bị thiếu
+    // thời gian định kỳ check và lấy các message bị thiếu
     private Integer timeRateGetMissMsgMS;
 
-    // timeout send, receive khi lấy req miss của src
+    // timeout send khi lấy message miss của Fanout
     private Integer timeoutSendReqMissMsg;
 
-    // timeout send, receive khi lấy req miss của src
+    // timeout receive khi lấy message miss của Fanout
     private Integer timeoutRecvReqMissMsg;
 
-    // kiểu WaitStrategy được sử dụng để gom msg lại và xử lý
+    // kiểu WaitStrategy trong Lmax Disruptor để gom message lại và xử lý
+    // tham khảo: https://lmax-exchange.github.io/disruptor/user-guide/index.html
     private WaitStrategy waitStrategy;
 
-    // kích cỡ ring buffer của disruptor xử lý msg. Phải là dạng 2^n
+    // kích cỡ ring buffer của disruptor xử lý message. Phải là dạng 2^n
     private Integer ringBufferSize;
 
     /*
@@ -53,6 +54,7 @@ public class SinkinCfg {
      *      1 index sẽ gồm 2 phần là [cycle number][sequence in cycle number]
      *      với LARGE_DAILY, "cycle number" sẽ gồm 27 bit, trừ 1 bit chứa dấu âm dương --> tối đa 2^26=67,108,864 chu kì --> 183,859 năm
      *          "sequence in cycle number" sẽ gồm 37 bit --> "137,438,953,471" item 1 cycle --> 1,590,728 item / giây
+     * tham khảo: https://github.com/OpenHFT/Chronicle-Queue/blob/ea/docs/FAQ.adoc#how-to-change-the-time-that-chronicle-queue-rolls
      */
     private LargeRollCycles rollCycles;
 
