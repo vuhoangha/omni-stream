@@ -465,7 +465,7 @@ The Collector class handles the centralized collection and processing of message
 For detailed documentation, examples, and API references, please
 visit  [OmniStream Documentation](https://github.com/vuhoangha/omni-stream).
 
-## Contributing
+## Contributingg
 
 We welcome contributions from the community! If you'd like to contribute, please follow
 our [contributing guidelines](CONTRIBUTING.md).
