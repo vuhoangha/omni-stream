@@ -6,6 +6,8 @@ import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
 import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.OmniWaitStrategy;
+import io.github.vuhoangha.Common.Utils;
+import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
 import net.openhft.chronicle.core.io.ReferenceOwner;
 import net.openhft.chronicle.queue.ExcerptAppender;
@@ -46,9 +48,9 @@ public class Fanout<T extends SelfDescribingMarshallable> {
 
     //region CHRONICLE QUEUE
     // connect tới folder chứa queue data. SingleChronicleQueue chỉ cho phép 1 người ghi cùng lúc
-    private final SingleChronicleQueue _queue;
+    private SingleChronicleQueue _queue;
     // dùng để ghi vào trong queue
-    private final ExcerptAppender _appender;
+    private ExcerptAppender _appender;
     // tổng số item trong queue. Dùng để đánh dấu seq nữa
     private long _seq_in_queue;
     // kích thước động.Lưu thông tin data gửi vào và thứ tự trong queue
@@ -71,8 +73,9 @@ public class Fanout<T extends SelfDescribingMarshallable> {
 
     //region DISRUPTOR
     // disruptor dùng để gom message từ nhiều thread lại và xử lý trong 1 thread duy nhất
-    private final Disruptor<T> _disruptor;
-    private final RingBuffer<T> _ring_buffer;
+    private Disruptor<T> _disruptor;
+    private RingBuffer<T> _ring_buffer;
+    private final Class<T> _data_type;
     //endregion
 
 
@@ -87,6 +90,7 @@ public class Fanout<T extends SelfDescribingMarshallable> {
 
     public Fanout(FanoutCfg cfg, Class<T> dataType) throws Exception {
         _cfg = cfg;
+        _data_type = dataType;
 
         // validate
         if (cfg.getQueuePath() == null)
@@ -113,6 +117,22 @@ public class Fanout<T extends SelfDescribingMarshallable> {
             cfg.setRollCycles(LargeRollCycles.LARGE_DAILY);
         if (cfg.getQueueWaitStrategy() == null)
             cfg.setQueueWaitStrategy(OmniWaitStrategy.YIELD);
+        if (cfg.getEnableBindingCore() == null)
+            cfg.setEnableBindingCore(false);
+        if (cfg.getCpu() == null)
+            cfg.setCpu(-2);
+        if (cfg.getEnableDisruptorBindingCore() == null)
+            cfg.setEnableDisruptorBindingCore(false);
+        if (cfg.getDisruptorCpu() == null)
+            cfg.setDisruptorCpu(-1);
+        if (cfg.getEnableQueueBindingCore() == null)
+            cfg.setEnableQueueBindingCore(false);
+        if (cfg.getQueueCpu() == null)
+            cfg.setQueueCpu(-1);
+        if (cfg.getEnableHandleConfirmBindingCore() == null)
+            cfg.setEnableHandleConfirmBindingCore(false);
+        if (cfg.getHandleConfirmCpu() == null)
+            cfg.setHandleConfirmCpu(-1);
 
         // đánh dấu hệ thống bắt đầu chạy
         _status = RUNNING;
@@ -124,44 +144,49 @@ public class Fanout<T extends SelfDescribingMarshallable> {
          */
         _zmq_context = new ZContext();
 
-        /*
-         *  tạo/connect 1 queue được lưu trữ dưới dạng binary
-         *  định dạng binary nhỏ gọn hơn định dạng khác
-         *  máy tính làm việc trực tiếp và có thể hiểu dữ liệu binary, ko cần chuyển đổi như các định dạng khác, ko cần lưu trữ thêm các ký tự thừa như JSON, XML..vv
-         *  từ đó CPU và memory giảm đáng kể
-         *  RollCycles: định kỳ bao lâu sẽ close file hiện tại, tạo 1 file mới. index_spacing = 256 (256 bản ghi mới đánh index 1 lần), index_count = 4096 (4096 index thì gom vào 1 segment)
-         */
-        _queue = SingleChronicleQueueBuilder
-                .binary(_cfg.getQueuePath())
-                .rollCycle(_cfg.getRollCycles())
-                .build();
-        _appender = _queue.acquireAppender();
-        _seq_in_queue = _queue.entryCount();   // lấy tổng số item trong queue
-        new Thread(() -> _onWriteQueue(_queue.createTailer())).start();  // lắng nghe msg mới trong queue
+        // khởi tạo luồng chính
+        Utils.runWithThreadAffinity(
+                "Fanout ALL",
+                true,
+                _cfg.getEnableBindingCore(),
+                _cfg.getCpu(),
+                _cfg.getEnableBindingCore(),
+                _cfg.getCpu(),
+                this::_initMainFlow);
+    }
 
-        /*
-         * tạo disruptor để hứng tất cả data được ghi từ nhiều thread
-         * ringBufferSize:
-         *   nếu để nhỏ quá, người viết sẽ phải chờ nếu ring_buffer đầy.
-         *   nếu to quá thì sẽ tốn bộ nhớ vì LmaxDisruptor phải tạo trước 1 số lượng Object = ringBufferSize
-         *   mục đích nhằm sử dụng lại các Object, tránh GC phải làm việc
-         * Executors.newSingleThreadExecutor():
-         *   dùng 1 thread duy nhất để đọc từ ring_buffer và ghi vào Chronicle Queue
-         *   ko phải dạng daemon thread --> app khi bị kill sẽ chờ thread làm nốt công việc
-         * YieldingWaitStrategy: ring buffer sử dụng Thread.yield() để khi rảnh rỗi thì nhường CPU cho thread khác chạy
-         */
-        this._disruptor = new Disruptor<>(
-                () -> _eventFactory(dataType),
-                _cfg.getRingBufferSize(),
-                Executors.newSingleThreadExecutor(),
-                ProducerType.MULTI,
-                cfg.getDisruptorWaitStrategy());
-        _disruptor.handleEventsWith((event, sequence, endOfBatch) -> this._onWriteDisruptor(event));
-        _disruptor.start();
-        _ring_buffer = _disruptor.getRingBuffer();
+
+    // luồng chính
+    private void _initMainFlow() {
+        // khởi tạo queue
+        Utils.runWithThreadAffinity(
+                "Fanout Chronicle Queue",
+                false,
+                _cfg.getEnableBindingCore(),
+                _cfg.getCpu(),
+                _cfg.getEnableQueueBindingCore(),
+                _cfg.getQueueCpu(),
+                this::_initQueueCore);
+
+        // khởi tạo disruptor
+        Utils.runWithThreadAffinity(
+                "Fanout Disruptor",
+                false,
+                _cfg.getEnableBindingCore(),
+                _cfg.getCpu(),
+                _cfg.getEnableDisruptorBindingCore(),
+                _cfg.getDisruptorCpu(),
+                this::_initDisruptorCore);
 
         // lắng nghe khi 1 sink req loss msg
-        new Thread(this::_listerReqConfirm).start();
+        new Thread(() -> Utils.runWithThreadAffinity(
+                "Fanout Handle Confirm",
+                false,
+                _cfg.getEnableBindingCore(),
+                _cfg.getCpu(),
+                _cfg.getEnableHandleConfirmBindingCore(),
+                _cfg.getHandleConfirmCpu(),
+                this::_initHandlerConfirm)).start();
 
         // được chạy khi JVM bắt đầu quá trình shutdown
         Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown));
@@ -169,111 +194,46 @@ public class Fanout<T extends SelfDescribingMarshallable> {
 
 
     /**
-     * Nhiều thread bên ngoài có thể gửi event cùng lúc để Persistent.
-     * Event sẽ được xử lý bởi 1 processor duy nhất thông qua Disruptor
-     * Trong lambda khi gọi 1 biến bên ngoài nó sẽ giữ 1 ref với biến đó
-     * từ đó GC sẽ phải thu hồi thêm rác
-     * vì vậy phải truyền "event" khi gọi "publishEvent" thay vì gọi trực tiếp
-     * See more: https://lmax-exchange.github.io/disruptor/user-guide/index.html
-     *
-     * @param event event cần persistent
-     * @return ghi vào queue có thành công hay không ?
+     * Phần cốt lõi để khởi tạo Chronicle queue
+     * tạo/connect 1 queue được lưu trữ dưới dạng binary
+     * định dạng binary nhỏ gọn hơn định dạng khác
+     * máy tính làm việc trực tiếp và có thể hiểu dữ liệu binary, ko cần chuyển đổi như các định dạng khác, ko cần lưu trữ thêm các ký tự thừa như JSON, XML..vv
+     * từ đó CPU và memory giảm đáng kể
+     * RollCycles: định kỳ bao lâu sẽ close file hiện tại, tạo 1 file mới. index_spacing = 256 (256 bản ghi mới đánh index 1 lần), index_count = 4096 (4096 index thì gom vào 1 segment)
      */
-    public boolean write(T event) {
-        // hệ thống chỉ nhận thêm msg khi đang "RUNNING"
-        if (_status != RUNNING) return false;
-
-        _ring_buffer.publishEvent((newEvent, sequence, srcEvent) -> srcEvent.copyTo(newEvent), event);
-        return true;
-    }
-
-
-    // Tạo một instance mới của class được chỉ định
-    private T _eventFactory(Class<T> dataType) {
-        try {
-            return dataType.newInstance();
-        } catch (InstantiationException | IllegalAccessException e) {
-            e.printStackTrace();
-            return null;
-        }
+    private void _initQueueCore() {
+        _queue = SingleChronicleQueueBuilder
+                .binary(_cfg.getQueuePath())
+                .rollCycle(_cfg.getRollCycles())
+                .build();
+        _appender = _queue.acquireAppender();
+        _seq_in_queue = _queue.entryCount();   // lấy tổng số item trong queue
+        new Thread(() -> _onWriteQueue(_queue.createTailer())).start();  // lắng nghe msg mới trong queue
     }
 
 
     /**
-     * Lắng nghe event từ Disruptor
-     * chuyển event sang binary và ghi vào Chronicle Queue
-     * cấu trúc item trong queue: ["version"]["độ dài data"]["data"]["seq in queue"]
-     *
-     * @param event event cần persistent
+     * tạo disruptor để hứng tất cả data được ghi từ nhiều thread
+     * ringBufferSize:
+     * nếu để nhỏ quá, người viết sẽ phải chờ nếu ring_buffer đầy.
+     * nếu to quá thì sẽ tốn bộ nhớ vì LmaxDisruptor phải tạo trước 1 số lượng Object = ringBufferSize
+     * mục đích nhằm sử dụng lại các Object, tránh GC phải làm việc
+     * Executors.newSingleThreadExecutor():
+     * dùng 1 thread duy nhất để đọc từ ring_buffer và ghi vào Chronicle Queue
+     * ko phải dạng daemon thread --> app khi bị kill sẽ chờ thread làm nốt công việc
      */
-    private void _onWriteDisruptor(T event) {
-        try {
-            // chuyển event sang binary
-            event.writeMarshallable(_wire_temp_disruptor);
+    private void _initDisruptorCore() {
+        LOGGER.info("Fanout run disruptor on logical processor " + Affinity.getCpu());
 
-            _byte_disruptor.writeByte(_cfg.getVersion());
-            _byte_disruptor.writeInt((int) _byte_temp_disruptor.writePosition());
-            _byte_disruptor.write(_byte_temp_disruptor);
-            _byte_disruptor.writeLong(++_seq_in_queue);
-
-            // ghi vào trong Chronicle Queue
-            _appender.writeBytes(_byte_disruptor);
-        } catch (Exception ex) {
-            LOGGER.error("Fanout listen write disruptor " + event.toString() + " error");
-            LOGGER.error("StackTrace", ex);
-        } finally {
-            _byte_temp_disruptor.clear();
-            _wire_temp_disruptor.clear();
-            _byte_disruptor.clear();
-        }
-    }
-
-
-    /**
-     * Lắng nghe msg được ghi vào queue
-     * Bên sink sẽ lưu thêm native queue "index" của bên source nhằm mục đích trace lại
-     * Cấu trúc gói tin gửi đi ["topic"]["version"]["độ dài data"]["data"]["seq in queue"]["source native index"]
-     * dùng ZeroMQ pub/sub gửi các msg này sang các sink
-     */
-    private void _onWriteQueue(ExcerptTailer tailer) {
-        ZMQ.Socket pubSocket = _zmq_context.createSocket(SocketType.PUB);
-        pubSocket.setSndHWM(_cfg.getMaxNumberMsgInCachePub()); // Thiết lập HWM cho socket. Default = 1000
-
-        Runnable waiter = OmniWaitStrategy.getWaiter(_cfg.getQueueWaitStrategy());
-
-        /*
-         * setHeartbeatIvl: interval gửi heartbeat
-         * setHeartbeatTtl: báo cho client biết sau bao lâu ko có msg bất kỳ thì client tự hiểu là connect này đã bị chết. Client có thể tạo 1 connect mới để kết nối lại
-         * setHeartbeatTimeout: kể từ lúc gửi msg ping, sau 1 thời gian mà ko có msg mới nào gửi tới qua socket này thì kết nối coi như đã chết. Nó sẽ hủy kết nối này và giải phóng tài nguyên
-         */
-        pubSocket.setHeartbeatIvl(10000);
-        pubSocket.setHeartbeatTtl(15000);
-        pubSocket.setHeartbeatTimeout(15000);
-
-        pubSocket.bind("tcp://*:" + _cfg.getRealtimePort());
-
-        // di chuyển tới bản ghi cuối cùng và lắng nghe các msg kế tiếp
-        tailer.toEnd();
-
-        while (_status == RUNNING) {
-            if (tailer.readBytes(_byte_stream_queue)) {
-                _byte_zmq_pub.writeByte(Constance.FANOUT.PUB_TOPIC.MSG);
-                _byte_zmq_pub.write(_byte_stream_queue);
-                _byte_zmq_pub.writeLong(tailer.lastReadIndex());
-
-                pubSocket.send(_byte_zmq_pub.toByteArray());
-
-                _byte_stream_queue.clear();
-                _byte_zmq_pub.clear();
-            } else {
-                waiter.run();
-            }
-        }
-
-        LOGGER.info("Fanout closing subscribe write queue");
-
-        pubSocket.close();
-        tailer.close();
+        this._disruptor = new Disruptor<>(
+                () -> _eventFactory(_data_type),
+                _cfg.getRingBufferSize(),
+                Executors.newSingleThreadExecutor(),
+                ProducerType.MULTI,
+                _cfg.getDisruptorWaitStrategy());
+        _disruptor.handleEventsWith((event, sequence, endOfBatch) -> this._onWriteDisruptor(event));
+        _disruptor.start();
+        _ring_buffer = _disruptor.getRingBuffer();
     }
 
 
@@ -287,7 +247,9 @@ public class Fanout<T extends SelfDescribingMarshallable> {
      * kiểu 1 cho "LATEST_MSG": ["version 1"]["độ dài data 1"]["data 1"]["seq in queue 1"]["source native index 1"]
      * kiểu 2 cho các loại còn lại: ["version 1"]["độ dài data 1"]["data 1"]["seq in queue 1"]["source native index 1"]["version 2"]["độ dài data 2"]["data 2"]["seq in queue 2"]["source native index 2"]
      */
-    private void _listerReqConfirm() {
+    private void _initHandlerConfirm() {
+        LOGGER.info("Fanout run handle confirm on logical processor " + Affinity.getCpu());
+
         ZMQ.Socket repSocket = _zmq_context.createSocket(SocketType.REP);
         repSocket.bind("tcp://*:" + _cfg.getConfirmPort());
 
@@ -380,6 +342,117 @@ public class Fanout<T extends SelfDescribingMarshallable> {
 
         tailer.close();
         repSocket.close();
+    }
+
+
+    /**
+     * Nhiều thread bên ngoài có thể gửi event cùng lúc để Persistent.
+     * Event sẽ được xử lý bởi 1 processor duy nhất thông qua Disruptor
+     * Trong lambda khi gọi 1 biến bên ngoài nó sẽ giữ 1 ref với biến đó
+     * từ đó GC sẽ phải thu hồi thêm rác
+     * vì vậy phải truyền "event" khi gọi "publishEvent" thay vì gọi trực tiếp
+     * See more: https://lmax-exchange.github.io/disruptor/user-guide/index.html
+     *
+     * @param event event cần persistent
+     * @return ghi vào queue có thành công hay không ?
+     */
+    public boolean write(T event) {
+        // hệ thống chỉ nhận thêm msg khi đang "RUNNING"
+        if (_status != RUNNING) return false;
+
+        _ring_buffer.publishEvent((newEvent, sequence, srcEvent) -> srcEvent.copyTo(newEvent), event);
+        return true;
+    }
+
+
+    // Tạo một instance mới của class được chỉ định
+    private T _eventFactory(Class<T> dataType) {
+        try {
+            return dataType.newInstance();
+        } catch (InstantiationException | IllegalAccessException e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+
+    /**
+     * Lắng nghe event từ Disruptor
+     * chuyển event sang binary và ghi vào Chronicle Queue
+     * cấu trúc item trong queue: ["version"]["độ dài data"]["data"]["seq in queue"]
+     *
+     * @param event event cần persistent
+     */
+    private void _onWriteDisruptor(T event) {
+        try {
+            // chuyển event sang binary
+            event.writeMarshallable(_wire_temp_disruptor);
+
+            _byte_disruptor.writeByte(_cfg.getVersion());
+            _byte_disruptor.writeInt((int) _byte_temp_disruptor.writePosition());
+            _byte_disruptor.write(_byte_temp_disruptor);
+            _byte_disruptor.writeLong(++_seq_in_queue);
+
+            // ghi vào trong Chronicle Queue
+            _appender.writeBytes(_byte_disruptor);
+        } catch (Exception ex) {
+            LOGGER.error("Fanout listen write disruptor " + event.toString() + " error");
+            LOGGER.error("StackTrace", ex);
+        } finally {
+            _byte_temp_disruptor.clear();
+            _wire_temp_disruptor.clear();
+            _byte_disruptor.clear();
+        }
+    }
+
+
+    /**
+     * Lắng nghe msg được ghi vào queue
+     * Bên sink sẽ lưu thêm native queue "index" của bên source nhằm mục đích trace lại
+     * Cấu trúc gói tin gửi đi ["topic"]["version"]["độ dài data"]["data"]["seq in queue"]["source native index"]
+     * dùng ZeroMQ pub/sub gửi các msg này sang các sink
+     */
+    private void _onWriteQueue(ExcerptTailer tailer) {
+        LOGGER.info("Fanout listen write queue on logical processor " + Affinity.getCpu());
+
+        ZMQ.Socket pubSocket = _zmq_context.createSocket(SocketType.PUB);
+        pubSocket.setSndHWM(_cfg.getMaxNumberMsgInCachePub()); // Thiết lập HWM cho socket. Default = 1000
+
+        Runnable waiter = OmniWaitStrategy.getWaiter(_cfg.getQueueWaitStrategy());
+
+        /*
+         * setHeartbeatIvl: interval gửi heartbeat
+         * setHeartbeatTtl: báo cho client biết sau bao lâu ko có msg bất kỳ thì client tự hiểu là connect này đã bị chết. Client có thể tạo 1 connect mới để kết nối lại
+         * setHeartbeatTimeout: kể từ lúc gửi msg ping, sau 1 thời gian mà ko có msg mới nào gửi tới qua socket này thì kết nối coi như đã chết. Nó sẽ hủy kết nối này và giải phóng tài nguyên
+         */
+        pubSocket.setHeartbeatIvl(10000);
+        pubSocket.setHeartbeatTtl(15000);
+        pubSocket.setHeartbeatTimeout(15000);
+
+        pubSocket.bind("tcp://*:" + _cfg.getRealtimePort());
+
+        // di chuyển tới bản ghi cuối cùng và lắng nghe các msg kế tiếp
+        tailer.toEnd();
+
+        while (_status == RUNNING) {
+            if (tailer.readBytes(_byte_stream_queue)) {
+                _byte_zmq_pub.writeByte(Constance.FANOUT.PUB_TOPIC.MSG);
+                _byte_zmq_pub.write(_byte_stream_queue);
+                _byte_zmq_pub.writeLong(tailer.lastReadIndex());
+
+                pubSocket.send(_byte_zmq_pub.toByteArray());
+
+                _byte_stream_queue.clear();
+                _byte_zmq_pub.clear();
+            } else {
+                waiter.run();
+            }
+        }
+
+        LOGGER.info("Fanout closing subscribe write queue");
+
+        pubSocket.close();
+        tailer.close();
     }
 
 

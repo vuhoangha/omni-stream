@@ -51,6 +51,47 @@ public class FanoutCfg {
     private LargeRollCycles rollCycles;
 
 
+    // cho phép toàn bộ Fanout chạy trên 1 CPU core riêng ?
+    private Boolean enableBindingCore;
+
+    /*
+     * cho phép toàn bộ Fanout chạy trên 1 logical processor riêng ?
+     *      "-1" là chạy trên 1 logical processor bất kỳ. Nếu có Logical Processor isolate dự trữ thì nó sẽ ưu tiên chạy trước. Nếu ko sẽ dùng chung với hệ điều hành
+     *      "-2": chạy trên nhiều logical processor bất kỳ theo sự điều phối của hệ điều hành
+     */
+    private Integer cpu;
+
+    // cho phép Lmax Disruptor chạy trên 1 CPU core riêng ?
+    private Boolean enableDisruptorBindingCore;
+
+    /*
+     * disruptor chạy trên 1 logical processor riêng
+     *      "-1" là chạy trên 1 logical processor bất kỳ. Nếu có Logical Processor isolate dự trữ thì nó sẽ ưu tiên chạy trước. Nếu ko sẽ dùng chung với hệ điều hành
+     *      "-2": chạy trên nhiều logical processor bất kỳ theo sự điều phối của hệ điều hành
+     */
+    private Integer disruptorCpu;
+
+    // cho phép Chronicle Queue chạy trên 1 CPU core riêng ?
+    private Boolean enableQueueBindingCore;
+
+    /*
+     * Chronicle Queue chạy trên 1 logical processor riêng
+     *      "-1" là chạy trên 1 logical processor bất kỳ. Nếu có Logical Processor isolate dự trữ thì nó sẽ ưu tiên chạy trước. Nếu ko sẽ dùng chung với hệ điều hành
+     *      "-2": chạy trên nhiều logical processor bất kỳ theo sự điều phối của hệ điều hành
+     */
+    private Integer queueCpu;
+
+    // cho phép handler confirm chạy trên 1 CPU core riêng ?
+    private Boolean enableHandleConfirmBindingCore;
+
+    /*
+     * Handler confirm chạy trên 1 logical processor riêng
+     *      "-1" là chạy trên 1 logical processor bất kỳ. Nếu có Logical Processor isolate dự trữ thì nó sẽ ưu tiên chạy trước. Nếu ko sẽ dùng chung với hệ điều hành
+     *      "-2": chạy trên nhiều logical processor bất kỳ theo sự điều phối của hệ điều hành
+     */
+    private Integer handleConfirmCpu;
+
+
     public FanoutCfg() {
     }
 
@@ -58,6 +99,78 @@ public class FanoutCfg {
         return new FanoutCfg();
     }
 
+
+    public Boolean getEnableHandleConfirmBindingCore() {
+        return enableHandleConfirmBindingCore;
+    }
+
+    public FanoutCfg setEnableHandleConfirmBindingCore(Boolean enableHandleConfirmBindingCore) {
+        this.enableHandleConfirmBindingCore = enableHandleConfirmBindingCore;
+        return this;
+    }
+
+    public Integer getHandleConfirmCpu() {
+        return handleConfirmCpu;
+    }
+
+    public FanoutCfg setHandleConfirmCpu(Integer handleConfirmCpu) {
+        this.queueCpu = handleConfirmCpu;
+        return this;
+    }
+
+    public Boolean getEnableQueueBindingCore() {
+        return enableQueueBindingCore;
+    }
+
+    public FanoutCfg setEnableQueueBindingCore(Boolean enableQueueBindingCore) {
+        this.enableQueueBindingCore = enableQueueBindingCore;
+        return this;
+    }
+
+    public Integer getQueueCpu() {
+        return queueCpu;
+    }
+
+    public FanoutCfg setQueueCpu(Integer queueCpu) {
+        this.queueCpu = queueCpu;
+        return this;
+    }
+
+    public Integer getCpu() {
+        return cpu;
+    }
+
+    public FanoutCfg setCpu(Integer cpu) {
+        this.cpu = cpu;
+        return this;
+    }
+
+    public Boolean getEnableBindingCore() {
+        return enableBindingCore;
+    }
+
+    public FanoutCfg setEnableBindingCore(Boolean enableBindingCore) {
+        this.enableBindingCore = enableBindingCore;
+        return this;
+    }
+
+    public Boolean getEnableDisruptorBindingCore() {
+        return enableDisruptorBindingCore;
+    }
+
+    public FanoutCfg setEnableDisruptorBindingCore(Boolean enableDisruptorBindingCore) {
+        this.enableDisruptorBindingCore = enableDisruptorBindingCore;
+        return this;
+    }
+
+    public Integer getDisruptorCpu() {
+        return disruptorCpu;
+    }
+
+    public FanoutCfg setDisruptorCpu(Integer disruptorCpu) {
+        this.disruptorCpu = disruptorCpu;
+        return this;
+    }
 
     public LargeRollCycles getRollCycles() {
         return rollCycles;
