@@ -6,6 +6,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.text.MessageFormat;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.locks.LockSupport;
 
 public class Utils {
 
@@ -73,15 +75,15 @@ public class Utils {
     /**
      * Chạy 1 function trên CPU core / Logical processor
      *
-     * @param name tên của logic code này
-     * @param isMainFlow đây có phải là luồng chính hay ko
-     * @param processBindingCore luồng chính có gắn vào 1 CPU core ko
-     * @param processCpu luồng chính có gắn vào logical processor nào ko
+     * @param name                      tên của logic code này
+     * @param isMainFlow                đây có phải là luồng chính hay ko
+     * @param processBindingCore        luồng chính có gắn vào 1 CPU core ko
+     * @param processCpu                luồng chính có gắn vào logical processor nào ko
      * @param enableSpecificBindingCore luồng phụ có gắn vào 1 CPU core ko
-     * @param cpu luồng phụ có gắn vào logical processor nào ko
-     * @param coreFunc logic code cần chạy
+     * @param cpu                       luồng phụ có gắn vào logical processor nào ko
+     * @param coreFunc                  logic code cần chạy
      */
-    public static void runWithThreadAffinity(
+    public static AffinityLock runWithThreadAffinity(
             String name,
             Boolean isMainFlow,
             Boolean processBindingCore,
@@ -89,30 +91,50 @@ public class Utils {
             Boolean enableSpecificBindingCore,
             Integer cpu,
             Runnable coreFunc) {
-        if (!isMainFlow && (processBindingCore || processCpu >= -1)) {
-            // cả Fanout chạy chung 1 CPU core hoặc 1 logical processor
-            coreFunc.run();
-        } else if (enableSpecificBindingCore) {
-            // chạy trên 1 CPU core riêng
-            try (AffinityLock al = AffinityLock.acquireCore()) {
+        try {
+            if (!isMainFlow && (processBindingCore || processCpu >= Constance.CPU_TYPE.ANY)) {
+                // cả Fanout chạy chung 1 CPU core hoặc 1 logical processor
                 coreFunc.run();
-            }
-        } else if (cpu == -2) {
-            // chạy như 1 thread bình thường, do hệ điều hành quản lý và phân phối tới các logical processor
-            coreFunc.run();
-        } else if (cpu == -1) {
-            // chạy trên 1 logical processor ngẫu nhiên
-            try (AffinityLock al = AffinityLock.acquireLock()) {
+                return null;
+            } else if (enableSpecificBindingCore) {
+                // chạy trên 1 CPU core riêng
+                CompletableFuture<AffinityLock> cb = new CompletableFuture<>();
+                new Thread(() -> {
+                    AffinityLock al = AffinityLock.acquireCore();
+                    cb.complete(al);
+                    coreFunc.run();
+                }).start();
+                return cb.get();
+            } else if (cpu == Constance.CPU_TYPE.NONE) {
+                // chạy như 1 thread bình thường, do hệ điều hành quản lý và phân phối tới các logical processor
                 coreFunc.run();
+                return null;
+            } else if (cpu == Constance.CPU_TYPE.ANY) {
+                // chạy trên 1 logical processor ngẫu nhiên
+                CompletableFuture<AffinityLock> cb = new CompletableFuture<>();
+                new Thread(() -> {
+                    AffinityLock al = AffinityLock.acquireLock();
+                    cb.complete(al);
+                    coreFunc.run();
+                }).start();
+                return cb.get();
+            } else if (cpu > Constance.CPU_TYPE.ANY) {
+                // chạy trên 1 logical processor chỉ định
+                CompletableFuture<AffinityLock> cb = new CompletableFuture<>();
+                new Thread(() -> {
+                    AffinityLock al = AffinityLock.acquireLock(cpu);
+                    cb.complete(al);
+                    coreFunc.run();
+                }).start();
+                return cb.get();
+            } else {
+                // cấu hình lỗi rồi
+                LOGGER.error(MessageFormat.format("Config {0} invalid. Stop now !", name));
+                return null;
             }
-        } else if (cpu >= 0) {
-            // chạy trên 1 logical processor chỉ định
-            try (AffinityLock al = AffinityLock.acquireLock(cpu)) {
-                coreFunc.run();
-            }
-        } else {
-            // cấu hình lỗi rồi
-            LOGGER.error(MessageFormat.format("Config {0} invalid. Stop now !", name));
+        } catch (Exception ex) {
+            LOGGER.error(MessageFormat.format("Config {0} exception", name), ex);
+            return null;
         }
     }
 

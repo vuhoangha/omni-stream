@@ -114,7 +114,7 @@ public class FanoutCfg {
     }
 
     public FanoutCfg setHandleConfirmCpu(Integer handleConfirmCpu) {
-        this.queueCpu = handleConfirmCpu;
+        this.handleConfirmCpu = handleConfirmCpu;
         return this;
     }
 

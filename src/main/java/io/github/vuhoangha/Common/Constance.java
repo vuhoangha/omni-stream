@@ -31,4 +31,10 @@ public class Constance {
 
     }
 
+    // các kiểu logical processor
+    public static class CPU_TYPE {
+        public static Integer ANY = -1;         // gán bất kỳ
+        public static Integer NONE = -2;        // ko gán cho 1 CPU core / logical processor cụ thể nào
+    }
+
 }

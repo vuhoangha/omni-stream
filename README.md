@@ -314,7 +314,7 @@ The Sinkin class handles receiving messages from the Fanout host and ensures the
 
 - `disruptorWaitStrategy`
   > The wait strategy of the Lmax Disruptor for batching messages from multiple threads. Consider the trade-off between latency and CPU performance based on your usage needs.
-  > Default: `BlockingWaitStrategy`
+  > Default: `YieldingWaitStrategy`
   > More info: [Lmax Disruptor User Guide](https://lmax-exchange.github.io/disruptor/user-guide/index.html)
 
 - `ringBufferSize`
