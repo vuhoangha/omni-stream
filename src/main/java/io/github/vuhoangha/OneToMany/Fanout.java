@@ -5,6 +5,7 @@ import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
 import io.github.vuhoangha.Common.Constance;
+import io.github.vuhoangha.Common.OmniWaitStrategy;
 import net.openhft.chronicle.bytes.Bytes;
 import net.openhft.chronicle.core.io.ReferenceOwner;
 import net.openhft.chronicle.queue.ExcerptAppender;
@@ -104,12 +105,14 @@ public class Fanout<T extends SelfDescribingMarshallable> {
             cfg.setMaxNumberMsgInCachePub(1000000);
         if (cfg.getVersion() == null)
             cfg.setVersion((byte) -128);
-        if (cfg.getWaitStrategy() == null)
-            cfg.setWaitStrategy(new BlockingWaitStrategy());
+        if (cfg.getDisruptorWaitStrategy() == null)
+            cfg.setDisruptorWaitStrategy(new BlockingWaitStrategy());
         if (cfg.getRingBufferSize() == null)
             cfg.setRingBufferSize(2 << 16);     // 131072
         if (cfg.getRollCycles() == null)
             cfg.setRollCycles(LargeRollCycles.LARGE_DAILY);
+        if (cfg.getQueueWaitStrategy() == null)
+            cfg.setQueueWaitStrategy(OmniWaitStrategy.YIELD);
 
         // đánh dấu hệ thống bắt đầu chạy
         _status = RUNNING;
@@ -152,7 +155,7 @@ public class Fanout<T extends SelfDescribingMarshallable> {
                 _cfg.getRingBufferSize(),
                 Executors.newSingleThreadExecutor(),
                 ProducerType.MULTI,
-                cfg.getWaitStrategy());
+                cfg.getDisruptorWaitStrategy());
         _disruptor.handleEventsWith((event, sequence, endOfBatch) -> this._onWriteDisruptor(event));
         _disruptor.start();
         _ring_buffer = _disruptor.getRingBuffer();
@@ -236,6 +239,8 @@ public class Fanout<T extends SelfDescribingMarshallable> {
         ZMQ.Socket pubSocket = _zmq_context.createSocket(SocketType.PUB);
         pubSocket.setSndHWM(_cfg.getMaxNumberMsgInCachePub()); // Thiết lập HWM cho socket. Default = 1000
 
+        Runnable waiter = OmniWaitStrategy.getWaiter(_cfg.getQueueWaitStrategy());
+
         /*
          * setHeartbeatIvl: interval gửi heartbeat
          * setHeartbeatTtl: báo cho client biết sau bao lâu ko có msg bất kỳ thì client tự hiểu là connect này đã bị chết. Client có thể tạo 1 connect mới để kết nối lại
@@ -261,17 +266,7 @@ public class Fanout<T extends SelfDescribingMarshallable> {
                 _byte_stream_queue.clear();
                 _byte_zmq_pub.clear();
             } else {
-                /*
-                 * ở đây có 2 option
-                 *      Thread.yield(): nhường CPU cho thread khác thực thi. Nếu ko có thread nào thì lại chạy tiếp Thread.yield()
-                 *      LockSupport.parkNanos(1): cho CPU nghỉ ngơi 1 nanoseconds.
-                 *          Thời gian nghỉ thực tế phụ thuộc vào hệ điều hành.
-                 *          Linux thông thường là 60 microseconds
-                 *          Do thời gian nghỉ ngơi quá nhỏ, nhân kernel trong linux phải gom các tiến trình lại để đánh thức nó dậy cùng 1 lúc
-                 *          Nếu thời gian nhỏ quá, điều này có thể phản tác dụng vì CPU ko nghỉ được nhiều mà còn tốn thêm thời gian lập lịch cho Thread này
-                 *          Tham khảo: https://hazelcast.com/blog/locksupport-parknanos-under-the-hood-and-the-curious-case-of-parking/
-                 */
-                LockSupport.parkNanos(1);
+                waiter.run();
             }
         }
 

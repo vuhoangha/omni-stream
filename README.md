@@ -312,7 +312,7 @@ The Sinkin class handles receiving messages from the Fanout host and ensures the
   > Specifies the maximum number of messages sent in one request when a Sinkin starts. This setting balances the number of requests with potential data transmission interruptions.
   > Default: `10,000`
 
-- `waitStrategy`
+- `disruptorWaitStrategy`
   > The wait strategy of the Lmax Disruptor for batching messages from multiple threads. Consider the trade-off between latency and CPU performance based on your usage needs.
   > Default: `BlockingWaitStrategy`
   > More info: [Lmax Disruptor User Guide](https://lmax-exchange.github.io/disruptor/user-guide/index.html)
@@ -320,6 +320,10 @@ The Sinkin class handles receiving messages from the Fanout host and ensures the
 - `ringBufferSize`
   > Size of the Lmax Disruptor's Ring Buffer for sending/receiving messages. Must be a power of two.
   > Default: `131,072`
+
+- `queueWaitStrategy`
+  > The wait strategy of the Processor for new messages from Chronicle Queue.
+  > Default: `OmniWaitStrategy.YIELD`
 
 - `maxNumberMsgInCachePub`
   > Maximum number of messages in the ZeroMQ publisher's cache.

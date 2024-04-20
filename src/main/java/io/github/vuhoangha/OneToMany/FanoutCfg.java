@@ -1,6 +1,7 @@
 package io.github.vuhoangha.OneToMany;
 
 import com.lmax.disruptor.WaitStrategy;
+import io.github.vuhoangha.Common.OmniWaitStrategy;
 import net.openhft.chronicle.queue.rollcycles.LargeRollCycles;
 
 public class FanoutCfg {
@@ -18,10 +19,13 @@ public class FanoutCfg {
     private Integer numberMsgInBatch;
 
     // kiểu WaitStrategy được sử dụng để gom msg từ nhiều thread ghi vào queue
-    private WaitStrategy waitStrategy;
+    private WaitStrategy disruptorWaitStrategy;
 
     // kích cỡ ring buffer của disruptor gửi/nhận msg. Phải là dạng 2^n
     private Integer ringBufferSize;
+
+    // kiểu WaitStrategy được sử dụng lắng nghe các message được ghi vào queue
+    private OmniWaitStrategy queueWaitStrategy;
 
     /*
      * số lượng msg tối đa trong bộ đệm của ZMQ publisher.
@@ -73,12 +77,21 @@ public class FanoutCfg {
         return this;
     }
 
-    public WaitStrategy getWaitStrategy() {
-        return waitStrategy;
+    public WaitStrategy getDisruptorWaitStrategy() {
+        return disruptorWaitStrategy;
     }
 
-    public FanoutCfg setWaitStrategy(WaitStrategy waitStrategy) {
-        this.waitStrategy = waitStrategy;
+    public FanoutCfg setDisruptorWaitStrategy(WaitStrategy disruptorWaitStrategy) {
+        this.disruptorWaitStrategy = disruptorWaitStrategy;
+        return this;
+    }
+
+    public OmniWaitStrategy getQueueWaitStrategy() {
+        return queueWaitStrategy;
+    }
+
+    public FanoutCfg setQueueWaitStrategy(OmniWaitStrategy queueWaitStrategy) {
+        this.queueWaitStrategy = queueWaitStrategy;
         return this;
     }
 
