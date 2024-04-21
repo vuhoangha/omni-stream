@@ -4,6 +4,7 @@ import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.YieldingWaitStrategy;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
+import io.github.vuhoangha.Common.AffinityCompose;
 import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.OmniWaitStrategy;
 import io.github.vuhoangha.Common.Utils;
@@ -27,6 +28,9 @@ import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.LockSupport;
 
@@ -90,10 +94,7 @@ public class Fanout<T extends SelfDescribingMarshallable> {
 
 
     //region THREAD AFFINITY
-    private AffinityLock _main_affinity_lock;
-    private AffinityLock _disruptor_lock;
-    private AffinityLock _queue_lock;
-    private AffinityLock _handle_confirm_lock;
+    List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
     //endregion
 
 
@@ -154,52 +155,58 @@ public class Fanout<T extends SelfDescribingMarshallable> {
         _zmq_context = new ZContext();
 
         // khởi tạo luồng chính
-        _main_affinity_lock = Utils.runWithThreadAffinity(
-                "Fanout ALL",
-                true,
-                _cfg.getEnableBindingCore(),
-                _cfg.getCpu(),
-                _cfg.getEnableBindingCore(),
-                _cfg.getCpu(),
-                this::_initMainFlow);
+        _affinity_composes.add(
+                Utils.runWithThreadAffinity(
+                        "Fanout ALL",
+                        true,
+                        _cfg.getEnableBindingCore(),
+                        _cfg.getCpu(),
+                        _cfg.getEnableBindingCore(),
+                        _cfg.getCpu(),
+                        this::_initMainFlow));
     }
 
 
     // luồng chính
     private void _initMainFlow() {
+        LOGGER.info("Fanout run main flow on logical processor " + Affinity.getCpu());
+
         // khởi tạo queue
-        _queue_lock = Utils.runWithThreadAffinity(
-                "Fanout Chronicle Queue",
-                false,
-                _cfg.getEnableBindingCore(),
-                _cfg.getCpu(),
-                _cfg.getEnableQueueBindingCore(),
-                _cfg.getQueueCpu(),
-                this::_initQueueCore);
+        _affinity_composes.add(
+                Utils.runWithThreadAffinity(
+                        "Fanout Chronicle Queue",
+                        false,
+                        _cfg.getEnableBindingCore(),
+                        _cfg.getCpu(),
+                        _cfg.getEnableQueueBindingCore(),
+                        _cfg.getQueueCpu(),
+                        this::_initQueueCore));
 
         LockSupport.parkNanos(500_000_000L);
 
         // khởi tạo disruptor
-        _disruptor_lock = Utils.runWithThreadAffinity(
-                "Fanout Disruptor",
-                false,
-                _cfg.getEnableBindingCore(),
-                _cfg.getCpu(),
-                _cfg.getEnableDisruptorBindingCore(),
-                _cfg.getDisruptorCpu(),
-                this::_initDisruptorCore);
+        _affinity_composes.add(
+                Utils.runWithThreadAffinity(
+                        "Fanout Disruptor",
+                        false,
+                        _cfg.getEnableBindingCore(),
+                        _cfg.getCpu(),
+                        _cfg.getEnableDisruptorBindingCore(),
+                        _cfg.getDisruptorCpu(),
+                        this::_initDisruptorCore));
 
         LockSupport.parkNanos(500_000_000L);
 
         // lắng nghe khi 1 sink req loss msg
-        _handle_confirm_lock = Utils.runWithThreadAffinity(
-                "Fanout Handle Confirm",
-                false,
-                _cfg.getEnableBindingCore(),
-                _cfg.getCpu(),
-                _cfg.getEnableHandleConfirmBindingCore(),
-                _cfg.getHandleConfirmCpu(),
-                this::_initHandlerConfirm);
+        _affinity_composes.add(
+                Utils.runWithThreadAffinity(
+                        "Fanout Handle Confirm",
+                        false,
+                        _cfg.getEnableBindingCore(),
+                        _cfg.getCpu(),
+                        _cfg.getEnableHandleConfirmBindingCore(),
+                        _cfg.getHandleConfirmCpu(),
+                        this::_initHandlerConfirm));
 
         // được chạy khi JVM bắt đầu quá trình shutdown
         Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown));
@@ -484,14 +491,14 @@ public class Fanout<T extends SelfDescribingMarshallable> {
          * disruptor sẽ xử lý nốt các msg nằm trong ring buffer
          */
         _disruptor.shutdown();
-        LockSupport.parkNanos(1_000_000_000);  // chờ để xử lý nốt msg
+        LockSupport.parkNanos(500_000_000);  // chờ để xử lý nốt msg
+
+        // close zeromq. Các socket sẽ được đóng lại cùng
+        _zmq_context.destroy();
 
         // chronicle queue sẽ đóng và lưu lại dữ liệu vào disk
         _appender.close();
         _queue.close();
-
-        // close zeromq. Các socket sẽ được đóng lại cùng
-        _zmq_context.destroy();
 
         ReferenceOwner refId = ReferenceOwner.temporary("Fanout");
         _byte_stream_queue.release(refId);   // trả lại bộ nhớ đã được cấp phát
@@ -502,14 +509,12 @@ public class Fanout<T extends SelfDescribingMarshallable> {
         _byte_disruptor.release(refId);   // trả lại bộ nhớ đã được cấp phát
         _byte_temp_disruptor.release(refId);   // trả lại bộ nhớ đã được cấp phát
 
-        if (_main_affinity_lock != null)
-            _main_affinity_lock.close();
-        if (_disruptor_lock != null)
-            _disruptor_lock.close();
-        if (_queue_lock != null)
-            _queue_lock.close();
-        if (_handle_confirm_lock != null)
-            _handle_confirm_lock.close();
+        // giải phóng các CPU core / Logical processor đã sử dụng
+        for (AffinityCompose affinityCompose : _affinity_composes) {
+            affinityCompose.release();
+        }
+
+        LockSupport.parkNanos(1_000_000_000);
 
         LOGGER.info("Fanout CLOSED !");
     }

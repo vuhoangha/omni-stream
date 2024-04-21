@@ -82,8 +82,9 @@ public class Utils {
      * @param enableSpecificBindingCore luồng phụ có gắn vào 1 CPU core ko
      * @param cpu                       luồng phụ có gắn vào logical processor nào ko
      * @param coreFunc                  logic code cần chạy
+     * @return chứa lock và thread chạy luồng này
      */
-    public static AffinityLock runWithThreadAffinity(
+    public static AffinityCompose runWithThreadAffinity(
             String name,
             Boolean isMainFlow,
             Boolean processBindingCore,
@@ -92,49 +93,51 @@ public class Utils {
             Integer cpu,
             Runnable coreFunc) {
         try {
-            if (!isMainFlow && (processBindingCore || processCpu >= Constance.CPU_TYPE.ANY)) {
-                // cả Fanout chạy chung 1 CPU core hoặc 1 logical processor
-                coreFunc.run();
-                return null;
-            } else if (enableSpecificBindingCore) {
-                // chạy trên 1 CPU core riêng
-                CompletableFuture<AffinityLock> cb = new CompletableFuture<>();
-                new Thread(() -> {
+            CompletableFuture<AffinityLock> cb = new CompletableFuture<>();
+
+            Thread thread = new Thread(() -> {
+                if (!isMainFlow && (processBindingCore || processCpu >= Constance.CPU_TYPE.ANY)) {
+                    // cả Fanout chạy chung 1 CPU core hoặc 1 logical processor
+                    cb.complete(null);
+                    coreFunc.run();
+                } else if (enableSpecificBindingCore) {
+                    // chạy trên 1 CPU core riêng
                     AffinityLock al = AffinityLock.acquireCore();
                     cb.complete(al);
                     coreFunc.run();
-                }).start();
-                return cb.get();
-            } else if (cpu == Constance.CPU_TYPE.NONE) {
-                // chạy như 1 thread bình thường, do hệ điều hành quản lý và phân phối tới các logical processor
-                coreFunc.run();
-                return null;
-            } else if (cpu == Constance.CPU_TYPE.ANY) {
-                // chạy trên 1 logical processor ngẫu nhiên
-                CompletableFuture<AffinityLock> cb = new CompletableFuture<>();
-                new Thread(() -> {
+                } else if (cpu == Constance.CPU_TYPE.NONE) {
+                    // chạy như 1 thread bình thường, do hệ điều hành quản lý và phân phối tới các logical processor
+                    cb.complete(null);
+                    coreFunc.run();
+                } else if (cpu == Constance.CPU_TYPE.ANY) {
+                    // chạy trên 1 logical processor ngẫu nhiên
                     AffinityLock al = AffinityLock.acquireLock();
                     cb.complete(al);
                     coreFunc.run();
-                }).start();
-                return cb.get();
-            } else if (cpu > Constance.CPU_TYPE.ANY) {
-                // chạy trên 1 logical processor chỉ định
-                CompletableFuture<AffinityLock> cb = new CompletableFuture<>();
-                new Thread(() -> {
+                } else if (cpu > Constance.CPU_TYPE.ANY) {
+                    // chạy trên 1 logical processor chỉ định
                     AffinityLock al = AffinityLock.acquireLock(cpu);
                     cb.complete(al);
                     coreFunc.run();
-                }).start();
-                return cb.get();
-            } else {
-                // cấu hình lỗi rồi
-                LOGGER.error(MessageFormat.format("Config {0} invalid. Stop now !", name));
-                return null;
-            }
+                } else {
+                    // cấu hình lỗi rồi
+                    LOGGER.error(MessageFormat.format("Config {0} invalid. Stop now !", name));
+                    cb.complete(null);
+                }
+
+                // giữ thread sống để việc lock vào CPU core / logical processor ko bị tranh chấp nhau
+                // khi process close sẽ giải phóng thread này
+                LockSupport.park();
+            });
+            thread.start();
+
+            AffinityCompose affinityCompose = new AffinityCompose();
+            affinityCompose.thread = thread;
+            affinityCompose.lock = cb.get();
+            return affinityCompose;
         } catch (Exception ex) {
             LOGGER.error(MessageFormat.format("Config {0} exception", name), ex);
-            return null;
+            return new AffinityCompose();
         }
     }
 
