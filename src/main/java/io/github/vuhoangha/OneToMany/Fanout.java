@@ -130,19 +130,19 @@ public class Fanout<T extends SelfDescribingMarshallable> {
         if (cfg.getEnableBindingCore() == null)
             cfg.setEnableBindingCore(false);
         if (cfg.getCpu() == null)
-            cfg.setCpu(-2);
+            cfg.setCpu(Constance.CPU_TYPE.NONE);
         if (cfg.getEnableDisruptorBindingCore() == null)
             cfg.setEnableDisruptorBindingCore(false);
         if (cfg.getDisruptorCpu() == null)
-            cfg.setDisruptorCpu(-1);
+            cfg.setDisruptorCpu(Constance.CPU_TYPE.ANY);
         if (cfg.getEnableQueueBindingCore() == null)
             cfg.setEnableQueueBindingCore(false);
         if (cfg.getQueueCpu() == null)
-            cfg.setQueueCpu(-1);
+            cfg.setQueueCpu(Constance.CPU_TYPE.ANY);
         if (cfg.getEnableHandleConfirmBindingCore() == null)
             cfg.setEnableHandleConfirmBindingCore(false);
         if (cfg.getHandleConfirmCpu() == null)
-            cfg.setHandleConfirmCpu(-1);
+            cfg.setHandleConfirmCpu(Constance.CPU_TYPE.ANY);
 
         // đánh dấu hệ thống bắt đầu chạy
         _status = RUNNING;

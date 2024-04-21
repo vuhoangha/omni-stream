@@ -338,6 +338,50 @@ The Sinkin class handles receiving messages from the Fanout host and ensures the
   > Default: `LargeRollCycles.LARGE_DAILY` (daily rollover)
   > More info: [Chronicle Queue FAQ](https://github.com/OpenHFT/Chronicle-Queue/blob/ea/docs/FAQ.adoc#how-to-change-the-time-that-chronicle-queue-rolls)
 
+- `enableBindingCore`
+  > Allows the entire Fanout process to run on a dedicated CPU core.
+  > Default: `false`
+
+- `cpu`
+  > Specifies the logical processor for the Fanout process:
+  > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
+  > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
+  > - `>= 0`: Runs on specifies the logical processor.
+  > Default: `Constance.CPU_TYPE.NONE`
+
+- `enableDisruptorBindingCore`
+  > Allows the Lmax Disruptor to run on a dedicated CPU core.
+  > Default: `false`
+
+- `disruptorCpu`
+  > Specifies the logical processor for the Fanout process:
+  > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
+  > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
+  > - `>= 0`: Runs on specifies the logical processor.
+      > Default: `Constance.CPU_TYPE.ANY`
+
+- `enableQueueBindingCore`
+  > Allows the Chronicle Queue to run on a dedicated CPU core.
+  > Default: `false`
+
+- `queueCpu`
+  > Specifies the logical processor for the Fanout process:
+  > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
+  > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
+  > - `>= 0`: Runs on specifies the logical processor.
+      > Default: `Constance.CPU_TYPE.ANY`
+
+- `enableHandleConfirmBindingCore`
+  > Allows the confirm handler to run on a dedicated CPU core.
+  > Default: `false`
+
+- `handleConfirmCpu`
+  > Specifies the logical processor for the Fanout process:
+  > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
+  > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
+  > - `>= 0`: Runs on specifies the logical processor.
+      > Default: `Constance.CPU_TYPE.ANY`
+
 ##### Sinkin Config
 - `queuePath *`
   > Specifies the directory that will contain the queue data on disk.
