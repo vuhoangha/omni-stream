@@ -1,6 +1,9 @@
 package io.github.vuhoangha.OneToMany;
 
 import com.lmax.disruptor.*;
+import net.openhft.affinity.Affinity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
@@ -15,6 +18,8 @@ import java.util.function.BiFunction;
  * học theo mô hình của 'BatchEventProcessor' trong Lmax Disruptor
  */
 public class SinkinMissCheckerProcessor implements EventProcessor {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(SinkinMissCheckerProcessor.class);
 
     private static final int IDLE = 0;              // trạng thái nằm im
     private static final int HALTED = IDLE + 1;     // trạng thái đã dừng
@@ -75,6 +80,8 @@ public class SinkinMissCheckerProcessor implements EventProcessor {
      */
     @Override
     public void run() {
+        LOGGER.info("SinkinMissCheckerProcessor on logical processor {}", Affinity.getCpu());
+
         if (running.compareAndSet(IDLE, RUNNING)) {
             // start processor
 
@@ -108,52 +115,50 @@ public class SinkinMissCheckerProcessor implements EventProcessor {
     private void _processEvents() {
         CheckMissMsg event = null;
         long nextSequence = sequence.get() + 1L;
-
-        // zmq socket
         ZMQ.Socket zSocket = _createSocket();
         long socketReadyTime = System.currentTimeMillis() + _ms_for_socket_ready;   // thời gian để socket sẵn sàng xử lý
-
         long availableSequence;
 
-        System.out.println("_processEvents missing");
+        try {
+            while (true) {
+                try {
+                    availableSequence = sequenceBarrier.waitFor(nextSequence);
 
-        while (true) {
-            try {
-                availableSequence = sequenceBarrier.waitFor(nextSequence);
+                    while (nextSequence <= availableSequence) {
+                        event = ringBuffer.get(nextSequence);
 
-                while (nextSequence <= availableSequence) {
-                    event = ringBuffer.get(nextSequence);
-
-                    if (socketReadyTime < System.currentTimeMillis()) {    // socket phải sẵn sàng thì mới xử lý
-                        boolean handlerSuccess = eventHandler.apply(zSocket, event);
-                        if (!handlerSuccess) {      // nếu quá trình gửi bị timeout --> close socket --> connect lại
-                            zSocket.close();
-                            zSocket = _createSocket();
-                            socketReadyTime = System.currentTimeMillis() + _ms_for_socket_ready;
+                        if (socketReadyTime < System.currentTimeMillis()) {    // socket phải sẵn sàng thì mới xử lý
+                            boolean handlerSuccess = eventHandler.apply(zSocket, event);
+                            if (!handlerSuccess) {      // nếu quá trình gửi bị timeout --> close socket --> connect lại
+                                zSocket.close();
+                                zSocket = _createSocket();
+                                socketReadyTime = System.currentTimeMillis() + _ms_for_socket_ready;
+                            }
                         }
+
+                        nextSequence++;
                     }
 
+                    sequence.set(availableSequence);
+                } catch (final TimeoutException e) {
+                    // bị timeout khi xử lý
+                    // notifyTimeout(sequence.get());
+                } catch (final AlertException ex) {
+                    // processor đang ko chạy thì stop luôn tiến trình này lại
+                    if (running.get() != RUNNING) {
+                        break;
+                    }
+                } catch (final Throwable ex) {
+                    // các lỗi khác ko handler được thì bỏ qua event này, xử lý cái tiếp theo
+                    sequence.set(nextSequence);
                     nextSequence++;
                 }
-
-                sequence.set(availableSequence);
-            } catch (final TimeoutException e) {
-                // bị timeout khi xử lý
-                // notifyTimeout(sequence.get());
-            } catch (final AlertException ex) {
-                // processor đang ko chạy thì stop luôn tiến trình này lại
-                if (running.get() != RUNNING) {
-                    break;
-                }
-            } catch (final Throwable ex) {
-                // các lỗi khác ko handler được thì bỏ qua event này, xử lý cái tiếp theo
-                sequence.set(nextSequence);
-                nextSequence++;
             }
+        } catch (Exception ex) {
+            LOGGER.error("SinkinMissCheckerProcessor ProcessEvents error", ex);
+        } finally {
+            zSocket.close();
         }
-
-        // đóng socket lại
-        zSocket.close();
     }
 
     private ZMQ.Socket _createSocket() {

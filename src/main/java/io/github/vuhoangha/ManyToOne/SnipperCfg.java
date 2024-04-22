@@ -1,6 +1,8 @@
 package io.github.vuhoangha.ManyToOne;
 
+import com.lmax.disruptor.BlockingWaitStrategy;
 import com.lmax.disruptor.WaitStrategy;
+import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.OmniWaitStrategy;
 import io.github.vuhoangha.OneToMany.SinkinCfg;
 
@@ -37,11 +39,21 @@ public class SnipperCfg {
     private Integer disruptorCpu;
 
 
-    public SnipperCfg() {
+    private SnipperCfg() {
     }
 
     public static SnipperCfg builder() {
-        return new SnipperCfg();
+        SnipperCfg cfg = new SnipperCfg();
+
+        cfg.setPort(5557);
+        cfg.setTimeout(10000);
+        cfg.setWaitStrategy(new BlockingWaitStrategy());
+        cfg.setRingBufferSize(2 << 16);     // 131072
+        cfg.setDisruptorWaitStrategy(OmniWaitStrategy.YIELD);
+        cfg.setDisruptorCpu(Constance.CPU_TYPE.ANY);
+        cfg.setEnableDisruptorBindingCore(false);
+
+        return cfg;
     }
 
 
@@ -81,7 +93,7 @@ public class SnipperCfg {
         return this;
     }
 
-    public String getUrl(){
+    public String getUrl() {
         return MessageFormat.format("tcp://{0}:{1}", collectorIP, port + "");
     }
 

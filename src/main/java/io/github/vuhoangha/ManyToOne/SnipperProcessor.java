@@ -19,7 +19,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentNavigableMap;
-import java.util.concurrent.locks.LockSupport;
 
 public class SnipperProcessor implements Runnable {
 
@@ -70,7 +69,7 @@ public class SnipperProcessor implements Runnable {
 
     @Override
     public void run() {
-        LOGGER.info("Snipper run Snipper Processor on logical processor " + Affinity.getCpu());
+        LOGGER.info("Snipper run Snipper Processor on logical processor {}", Affinity.getCpu());
 
         // khởi tạo socket
         ZMQ.Socket socket = _zContext.createSocket(SocketType.DEALER);
@@ -91,71 +90,78 @@ public class SnipperProcessor implements Runnable {
 
         Runnable waiter = OmniWaitStrategy.getWaiter(_wait_strategy);
 
-        // luồng chính
-        while (_running) {
+        try {
+            // luồng chính
+            while (_running) {
 
-            // xem có msg nào cần gửi đi ko
-            availableSequence = _sequencer.getHighestPublishedSequence(nextSequence, _ring_buffer.getCursor());     // lấy sequence được publish cuối cùng trong ring_buffer
-            if (nextSequence <= availableSequence) {
-                while (nextSequence <= availableSequence) {
-                    newEvent = _ring_buffer.get(nextSequence);
-                    _send(socket, newEvent);
-                    nextSequence++;
+                // xem có msg nào cần gửi đi ko
+                availableSequence = _sequencer.getHighestPublishedSequence(nextSequence, _ring_buffer.getCursor());     // lấy sequence được publish cuối cùng trong ring_buffer
+                if (nextSequence <= availableSequence) {
+                    while (nextSequence <= availableSequence) {
+                        newEvent = _ring_buffer.get(nextSequence);
+                        _send(socket, newEvent);
+                        nextSequence++;
+                    }
+                    _sequence.set(availableSequence);    // di chuyển tới sequence cuối cùng ghi nhận
                 }
-                _sequence.set(availableSequence);    // di chuyển tới sequence cuối cùng ghi nhận
-            }
 
-            // check xem có nhận đc msg mới không?
-            while (true) {
-                reply = socket.recv(ZMQ.NOBLOCK);
-                if (reply != null) {
-                    // xóa khỏi cache --> callback về
-                    id = Utils.bytesToLong(reply);
-                    _map_item_with_time.remove(id);
-                    CompletableFuture<Boolean> cb = _map_item_with_callback.remove(id);
-                    if (cb != null)
-                        cb.complete(true);
-                } else {
-                    break;
-                }
-            }
-
-            // check xem có msg nào bị timeout ko
-            long nowMS = System.currentTimeMillis();
-            if (nextTimeCheckTimeout < nowMS) {
-                while (!_map_item_with_time.isEmpty()) {
-                    Map.Entry<Long, Long> firstEntry = _map_item_with_time.firstEntry();
-                    if (firstEntry.getValue() < nowMS) {
-                        // bị timeout --> xóa khỏi cache --> callback về
-                        _map_item_with_time.remove(firstEntry.getKey());
-                        CompletableFuture<Boolean> cb = _map_item_with_callback.remove(firstEntry.getKey());
-                        cb.complete(false);
+                // check xem có nhận đc msg mới không?
+                while (true) {
+                    reply = socket.recv(ZMQ.NOBLOCK);
+                    if (reply != null) {
+                        // xóa khỏi cache --> callback về
+                        id = Utils.bytesToLong(reply);
+                        _map_item_with_time.remove(id);
+                        CompletableFuture<Boolean> cb = _map_item_with_callback.remove(id);
+                        if (cb != null)
+                            cb.complete(true);
                     } else {
-                        // dừng tìm kiếm vì key sắp xếp tăng dần và key-value tăng tỉ lệ thuận
                         break;
                     }
                 }
-                nextTimeCheckTimeout += _time_out_interval_ms;
+
+                // check xem có msg nào bị timeout ko
+                long nowMS = System.currentTimeMillis();
+                if (nextTimeCheckTimeout < nowMS) {
+                    while (!_map_item_with_time.isEmpty()) {
+                        Map.Entry<Long, Long> firstEntry = _map_item_with_time.firstEntry();
+                        if (firstEntry.getValue() < nowMS) {
+                            // bị timeout --> xóa khỏi cache --> callback về
+                            _map_item_with_time.remove(firstEntry.getKey());
+                            CompletableFuture<Boolean> cb = _map_item_with_callback.remove(firstEntry.getKey());
+                            cb.complete(false);
+                        } else {
+                            // dừng tìm kiếm vì key sắp xếp tăng dần và key-value tăng tỉ lệ thuận
+                            break;
+                        }
+                    }
+                    nextTimeCheckTimeout += _time_out_interval_ms;
+                }
+
+                // cho CPU nghỉ ngơi 1 chút
+                waiter.run();
             }
-
-            // cho CPU nghỉ ngơi 1 chút
-            waiter.run();
+        } catch (Exception ex) {
+            LOGGER.error("SnipperProcessor run error", ex);
+        } finally {
+            socket.close();
         }
-
-        // đóng socket
-        socket.close();
     }
 
 
     // dữ liệu gửi đi ["id"]["data"]
     private void _send(ZMQ.Socket socket, SnipperInterMsg msg) {
-        _bytes_req.writeLong(msg.getId());
-        msg.getData().writeMarshallable(_wire_req);
+        try {
+            _bytes_req.writeLong(msg.getId());
+            msg.getData().writeMarshallable(_wire_req);
 
-        socket.send(_bytes_req.toByteArray(), 0);
-
-        _bytes_req.clear();
-        _wire_req.clear();
+            socket.send(_bytes_req.toByteArray(), 0);
+        } catch (Exception ex) {
+            LOGGER.error("SnipperProcessor send error, msg {}", msg.toString(), ex);
+        } finally {
+            _bytes_req.clear();
+            _wire_req.clear();
+        }
     }
 
 

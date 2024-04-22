@@ -26,4 +26,12 @@ public class SnipperInterMsg<T extends SelfDescribingMarshallable> {
     public void setData(T data) {
         this.data = data;
     }
+
+    @Override
+    public String toString() {
+        return "SnipperInterMsg{" +
+                "id=" + id +
+                ", data='" + data.toString() + '\'' +
+                '}';
+    }
 }
