@@ -4,8 +4,11 @@ import com.lmax.disruptor.BlockingWaitStrategy;
 import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
+import io.github.vuhoangha.Common.AffinityCompose;
 import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.ObjectPool;
+import io.github.vuhoangha.Common.Utils;
+import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
 import net.openhft.chronicle.core.io.ReferenceOwner;
 import net.openhft.chronicle.queue.ExcerptAppender;
@@ -24,8 +27,7 @@ import org.zeromq.ZMQ;
 
 import java.nio.ByteBuffer;
 import java.text.MessageFormat;
-import java.util.NavigableMap;
-import java.util.TreeMap;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -63,9 +65,9 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
 
     //region CHRONICLE QUEUE
     // connect tới folder chứa queue data
-    private final SingleChronicleQueue _queue;
+    private SingleChronicleQueue _queue;
     // dùng để ghi vào trong queue
-    private final ExcerptAppender _appender;
+    private ExcerptAppender _appender;
     // tổng số item trong queue
     private long _seq_in_queue;
     // src index của item mới nhất trong queue
@@ -84,18 +86,21 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
     private byte[] _byte_miss_msg_raw;
     // dùng để đọc các msg được gửi đến
     private final Bytes<ByteBuffer> _byte_read_rcv_msg = Bytes.elasticByteBuffer();
-    // sub msg
-    private final ExecutorService _sub_extor = Executors.newSingleThreadExecutor();
     //endregion
 
 
     //region DISRUPTOR
     // disruptor dùng để gom message từ nhiều thread lại và xử lý trong 1 thread duy nhất
-    private final Disruptor<SinkProcessMsg> _disruptor_process_msg;
-    private final RingBuffer<SinkProcessMsg> _ring_buffer_process_msg;
-    private final Disruptor<CheckMissMsg> _disruptor_miss_msg;
-    private final RingBuffer<CheckMissMsg> _ring_buffer_miss_msg;
-    private final SinkinMissCheckerProcessor _miss_check_processor;
+    private Disruptor<SinkProcessMsg> _disruptor_process_msg;
+    private RingBuffer<SinkProcessMsg> _ring_buffer_process_msg;
+    private Disruptor<CheckMissMsg> _disruptor_miss_msg;
+    private RingBuffer<CheckMissMsg> _ring_buffer_miss_msg;
+    private SinkinMissCheckerProcessor _miss_check_processor;
+    //endregion
+
+
+    //region THREAD AFFINITY
+    List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
     //endregion
 
 
@@ -137,6 +142,25 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
             cfg.setRingBufferSize(2 << 16);     // 131072
         if (cfg.getRollCycles() == null)
             cfg.setRollCycles(LargeRollCycles.LARGE_DAILY);
+        if (cfg.getEnableBindingCore() == null)
+            cfg.setEnableBindingCore(false);
+        if (cfg.getCpu() == null)
+            cfg.setCpu(Constance.CPU_TYPE.NONE);
+
+        if (cfg.getEnableDisruptorProcessMsgBindingCore() == null)
+            cfg.setEnableDisruptorProcessMsgBindingCore(false);
+        if (cfg.getDisruptorProcessMsgCpu() == null)
+            cfg.setDisruptorProcessMsgCpu(Constance.CPU_TYPE.ANY);
+
+        if (cfg.getEnableCheckMissMsgAndSubQueueBindingCore() == null)
+            cfg.setEnableCheckMissMsgAndSubQueueBindingCore(false);
+        if (cfg.getCheckMissMsgAndSubQueueCpu() == null)
+            cfg.setCheckMissMsgAndSubQueueCpu(Constance.CPU_TYPE.ANY);
+
+        if (cfg.getEnableSubMsgBindingCore() == null)
+            cfg.setEnableSubMsgBindingCore(false);
+        if (cfg.getSubMsgCpu() == null)
+            cfg.setSubMsgCpu(Constance.CPU_TYPE.ANY);
 
 
         this._dataType = dataType;
@@ -149,48 +173,6 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
          * socket chỉ nên sử dụng bởi 1 thread duy nhất để đảm bảo tính nhất quán
          */
         _zmq_context = new ZContext();
-
-        /*
-         * xử lý các msg được gửi tới và lưu vào queue
-         * sau đó check xem còn msg chờ trong cache ko thì lấy ra xử lý
-         * Nhận xử lý từ các nơi sau:
-         *      các msg đến từ pub/sub
-         *      các miss msg
-         *      các yêu cầu check miss msg
-         */
-        _disruptor_process_msg = new Disruptor<>(
-                SinkProcessMsg::new,
-                _cfg.getRingBufferSize(),
-                Executors.newSingleThreadExecutor(),
-                ProducerType.MULTI,
-                cfg.getWaitStrategy());
-        _disruptor_process_msg.handleEventsWith((event, sequence, endOfBatch) -> this._onMsg(event));
-        _disruptor_process_msg.start();
-        _ring_buffer_process_msg = _disruptor_process_msg.getRingBuffer();
-
-        /*
-         * Check xem có msg nào bị miss ko
-         * Có 2 chế độ là "lấy msg mới nhất" và "lấy msg nằm giữa 2 index"
-         */
-        _disruptor_miss_msg = new Disruptor<>(
-                CheckMissMsg::new,
-                2 << 7,    // 256
-                Executors.newSingleThreadExecutor(),
-                ProducerType.MULTI,
-                new BlockingWaitStrategy());
-        _disruptor_miss_msg.start();
-        _ring_buffer_miss_msg = _disruptor_miss_msg.getRingBuffer();
-
-        // lắng nghe các yêu cầu lấy msg bị miss
-        _miss_check_processor = new SinkinMissCheckerProcessor(
-                _ring_buffer_miss_msg,
-                _ring_buffer_miss_msg.newBarrier(),
-                _zmq_context,
-                _cfg.getConfirmUrl(),
-                _cfg.getTimeoutSendReqMissMsg(),
-                _cfg.getTimeoutRecvReqMissMsg(),
-                this::_onMissMsgReq);
-        new Thread(_miss_check_processor).start();
 
         /*
          *  tạo/connect 1 queue được lưu trữ dưới dạng binary
@@ -291,8 +273,16 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
 
         LOGGER.info("Sinkin synced done !");
 
-        // chạy luồng chính
-        new Thread(this::_mainProcess).start();
+        // khởi tạo luồng chính
+        _affinity_composes.add(
+                Utils.runWithThreadAffinity(
+                        "Sinkin ALL",
+                        true,
+                        _cfg.getEnableBindingCore(),
+                        _cfg.getCpu(),
+                        _cfg.getEnableBindingCore(),
+                        _cfg.getCpu(),
+                        this::_mainProcess));
     }
 
 
@@ -300,6 +290,96 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
      * luồng chính xử lý công việc
      */
     private void _mainProcess() {
+        LOGGER.info("Sinkin run main flow on logical processor " + Affinity.getCpu());
+
+        // khởi tạo disruptor xử lý các msg chính
+        _affinity_composes.add(
+                Utils.runWithThreadAffinity(
+                        "Sinkin Disruptor Process Msg",
+                        false,
+                        _cfg.getEnableBindingCore(),
+                        _cfg.getCpu(),
+                        _cfg.getEnableDisruptorProcessMsgBindingCore(),
+                        _cfg.getDisruptorProcessMsgCpu(),
+                        this::_initDisruptorProcessMsg));
+
+        // Control miss msg and subscribe queue
+        _affinity_composes.add(
+                Utils.runWithThreadAffinity(
+                        "Sinkin Check Miss Msg And Sub Queue",
+                        false,
+                        _cfg.getEnableBindingCore(),
+                        _cfg.getCpu(),
+                        _cfg.getEnableCheckMissMsgAndSubQueueBindingCore(),
+                        _cfg.getCheckMissMsgAndSubQueueCpu(),
+                        this::_initCheckMissMsgAndListenQueue));
+
+        // Control miss msg and subscribe queue
+        _affinity_composes.add(
+                Utils.runWithThreadAffinity(
+                        "Sinkin Subscribe Msg",
+                        false,
+                        _cfg.getEnableBindingCore(),
+                        _cfg.getCpu(),
+                        _cfg.getEnableSubMsgBindingCore(),
+                        _cfg.getSubMsgCpu(),
+                        new Thread(this::_subMsg)));
+    }
+
+
+    /**
+     * xử lý các msg được gửi tới và lưu vào queue
+     * sau đó check xem còn msg chờ trong cache ko thì lấy ra xử lý
+     * Nhận xử lý từ các nơi sau:
+     * các msg đến từ pub/sub
+     * các miss msg
+     * các yêu cầu check miss msg
+     */
+    private void _initDisruptorProcessMsg() {
+        LOGGER.info("Sinkin run disruptor process msg on logical processor " + Affinity.getCpu());
+
+        _disruptor_process_msg = new Disruptor<>(
+                SinkProcessMsg::new,
+                _cfg.getRingBufferSize(),
+                Executors.newSingleThreadExecutor(),
+                ProducerType.MULTI,
+                _cfg.getWaitStrategy());
+        _disruptor_process_msg.handleEventsWith((event, sequence, endOfBatch) -> this._onMsg(event));
+        _disruptor_process_msg.start();
+        _ring_buffer_process_msg = _disruptor_process_msg.getRingBuffer();
+    }
+
+
+    /**
+     * Check các msg bị miss và lắng nghe các msg mới được ghi vào queue để gửi cho application
+     */
+    private void _initCheckMissMsgAndListenQueue() {
+        LOGGER.info("Sinkin run check miss msg and subscribe queue on logical processor " + Affinity.getCpu());
+
+        /*
+         * Check xem có msg nào bị miss ko
+         * Có 2 chế độ là "lấy msg mới nhất" và "lấy msg nằm giữa 2 index"
+         */
+        _disruptor_miss_msg = new Disruptor<>(
+                CheckMissMsg::new,
+                2 << 7,    // 256
+                Executors.newSingleThreadExecutor(),
+                ProducerType.MULTI,
+                new BlockingWaitStrategy());
+        _disruptor_miss_msg.start();
+        _ring_buffer_miss_msg = _disruptor_miss_msg.getRingBuffer();
+
+        // lắng nghe các yêu cầu lấy msg bị miss
+        _miss_check_processor = new SinkinMissCheckerProcessor(
+                _ring_buffer_miss_msg,
+                _ring_buffer_miss_msg.newBarrier(),
+                _zmq_context,
+                _cfg.getConfirmUrl(),
+                _cfg.getTimeoutSendReqMissMsg(),
+                _cfg.getTimeoutRecvReqMissMsg(),
+                this::_onMissMsgReq);
+        new Thread(_miss_check_processor).start();
+
         /*
          * định kỳ check xem có msg mới ko
          * định kỳ check xem msg trong hàng đợi có chờ quá lâu ko
@@ -309,9 +389,6 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
 
         // bắt đầu lắng nghe việc ghi vào queue
         _listen_write_queue_extor.submit(this::_onWriteQueue);
-
-        // sub msg
-        _sub_extor.submit(this::_subMsg);
     }
 
 
@@ -343,6 +420,8 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
      * Sub các msg được src stream sang
      */
     private void _subMsg() {
+        LOGGER.info("Sinkin run subscribe msg on logical processor " + Affinity.getCpu());
+
         ZMQ.Socket subscriber = _zmq_context.createSocket(SocketType.SUB);
         subscriber.setRcvHWM(_cfg.getZmqSubBufferSize());   // setting buffer size các msg được nhận
 
@@ -676,7 +755,6 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         _status = STOP;
 
         // close zeromq, ngừng nhận msg mới
-        _sub_extor.shutdownNow();
         _zmq_context.destroy();
 
         // turnoff miss check processor, ngừng việc lấy các msg thiếu và msg mới nhất
@@ -700,6 +778,11 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         // byte
         _byte_miss_msg.release(_ref_id);
         _byte_read_rcv_msg.release(_ref_id);
+
+        // giải phóng các CPU core / Logical processor đã sử dụng
+        for (AffinityCompose affinityCompose : _affinity_composes) {
+            affinityCompose.release();
+        }
 
         LOGGER.info("Sinkin CLOSED !");
     }

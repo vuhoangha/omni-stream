@@ -58,6 +58,46 @@ public class SinkinCfg {
      */
     private LargeRollCycles rollCycles;
 
+    // cho phép toàn bộ Sinkin chạy trên 1 CPU core riêng ?
+    private Boolean enableBindingCore;
+
+    /*
+     * cho phép toàn bộ Sinkin chạy trên 1 logical processor riêng ?
+     *      "-1" là chạy trên 1 logical processor bất kỳ. Nếu có Logical Processor isolate dự trữ thì nó sẽ ưu tiên chạy trước. Nếu ko sẽ dùng chung với hệ điều hành
+     *      "-2": chạy trên nhiều logical processor bất kỳ theo sự điều phối của hệ điều hành
+     */
+    private Integer cpu;
+
+    // cho phép Disruptor process msg chạy trên 1 CPU core riêng ?
+    private Boolean enableDisruptorProcessMsgBindingCore;
+
+    /*
+     * Disruptor process msg chạy trên 1 logical processor riêng
+     *      "-1" là chạy trên 1 logical processor bất kỳ. Nếu có Logical Processor isolate dự trữ thì nó sẽ ưu tiên chạy trước. Nếu ko sẽ dùng chung với hệ điều hành
+     *      "-2": chạy trên nhiều logical processor bất kỳ theo sự điều phối của hệ điều hành
+     */
+    private Integer disruptorProcessMsgCpu;
+
+    // cho phép việc check các msg bị miss và sub các item mới trong queue chạy trên 1 CPU core riêng ?
+    private Boolean enableCheckMissMsgAndSubQueueBindingCore;
+
+    /*
+     * Check các msg bị miss và sub các item mới trong queue msg chạy trên 1 logical processor riêng
+     *      "-1" là chạy trên 1 logical processor bất kỳ. Nếu có Logical Processor isolate dự trữ thì nó sẽ ưu tiên chạy trước. Nếu ko sẽ dùng chung với hệ điều hành
+     *      "-2": chạy trên nhiều logical processor bất kỳ theo sự điều phối của hệ điều hành
+     */
+    private Integer checkMissMsgAndSubQueueCpu;
+
+    // cho phép sub các msg mới chạy trên 1 CPU core riêng ?
+    private Boolean enableSubMsgBindingCore;
+
+    /*
+     * Sub các msg mới chạy trên 1 logical processor riêng
+     *      "-1" là chạy trên 1 logical processor bất kỳ. Nếu có Logical Processor isolate dự trữ thì nó sẽ ưu tiên chạy trước. Nếu ko sẽ dùng chung với hệ điều hành
+     *      "-2": chạy trên nhiều logical processor bất kỳ theo sự điều phối của hệ điều hành
+     */
+    private Integer subMsgCpu;
+
 
     public SinkinCfg() {
     }
@@ -66,6 +106,78 @@ public class SinkinCfg {
         return new SinkinCfg();
     }
 
+    public Integer getSubMsgCpu() {
+        return subMsgCpu;
+    }
+
+    public SinkinCfg setSubMsgCpu(Integer subMsgCpu) {
+        this.subMsgCpu = subMsgCpu;
+        return this;
+    }
+
+    public Boolean getEnableSubMsgBindingCore() {
+        return enableSubMsgBindingCore;
+    }
+
+    public SinkinCfg setEnableSubMsgBindingCore(Boolean enableSubMsgBindingCore) {
+        this.enableSubMsgBindingCore = enableSubMsgBindingCore;
+        return this;
+    }
+
+
+    public Integer getCheckMissMsgAndSubQueueCpu() {
+        return checkMissMsgAndSubQueueCpu;
+    }
+
+    public SinkinCfg setCheckMissMsgAndSubQueueCpu(Integer checkMissMsgAndSubQueueCpu) {
+        this.checkMissMsgAndSubQueueCpu = checkMissMsgAndSubQueueCpu;
+        return this;
+    }
+
+    public Boolean getEnableCheckMissMsgAndSubQueueBindingCore() {
+        return enableCheckMissMsgAndSubQueueBindingCore;
+    }
+
+    public SinkinCfg setEnableCheckMissMsgAndSubQueueBindingCore(Boolean enableCheckMissMsgAndSubQueueBindingCore) {
+        this.enableCheckMissMsgAndSubQueueBindingCore = enableCheckMissMsgAndSubQueueBindingCore;
+        return this;
+    }
+
+    public Integer getDisruptorProcessMsgCpu() {
+        return disruptorProcessMsgCpu;
+    }
+
+    public SinkinCfg setDisruptorProcessMsgCpu(Integer disruptorProcessMsgCpu) {
+        this.disruptorProcessMsgCpu = disruptorProcessMsgCpu;
+        return this;
+    }
+
+    public Boolean getEnableDisruptorProcessMsgBindingCore() {
+        return enableDisruptorProcessMsgBindingCore;
+    }
+
+    public SinkinCfg setEnableDisruptorProcessMsgBindingCore(Boolean enableDisruptorProcessMsgBindingCore) {
+        this.enableDisruptorProcessMsgBindingCore = enableDisruptorProcessMsgBindingCore;
+        return this;
+    }
+
+    public Integer getCpu() {
+        return cpu;
+    }
+
+    public SinkinCfg setCpu(Integer cpu) {
+        this.cpu = cpu;
+        return this;
+    }
+
+    public Boolean getEnableBindingCore() {
+        return enableBindingCore;
+    }
+
+    public SinkinCfg setEnableBindingCore(Boolean enableBindingCore) {
+        this.enableBindingCore = enableBindingCore;
+        return this;
+    }
 
     public LargeRollCycles getRollCycles() {
         return rollCycles;

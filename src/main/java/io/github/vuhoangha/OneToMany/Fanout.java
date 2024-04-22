@@ -182,8 +182,6 @@ public class Fanout<T extends SelfDescribingMarshallable> {
                         _cfg.getQueueCpu(),
                         this::_initQueueCore));
 
-        LockSupport.parkNanos(500_000_000L);
-
         // khởi tạo disruptor
         _affinity_composes.add(
                 Utils.runWithThreadAffinity(
@@ -195,8 +193,6 @@ public class Fanout<T extends SelfDescribingMarshallable> {
                         _cfg.getDisruptorCpu(),
                         this::_initDisruptorCore));
 
-        LockSupport.parkNanos(500_000_000L);
-
         // lắng nghe khi 1 sink req loss msg
         _affinity_composes.add(
                 Utils.runWithThreadAffinity(
@@ -206,7 +202,7 @@ public class Fanout<T extends SelfDescribingMarshallable> {
                         _cfg.getCpu(),
                         _cfg.getEnableHandleConfirmBindingCore(),
                         _cfg.getHandleConfirmCpu(),
-                        this::_initHandlerConfirm));
+                        new Thread(this::_initHandlerConfirm)));
 
         // được chạy khi JVM bắt đầu quá trình shutdown
         Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown));

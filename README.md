@@ -439,7 +439,52 @@ The Sinkin class handles receiving messages from the Fanout host and ensures the
   > Period for rolling over from an old file to a new file in the queue. The `LargeRollCycles.LARGE_DAILY` setting provides a balance between indexing and file management.
   > Default: `LargeRollCycles.LARGE_DAILY`
   > More info: [Chronicle Queue FAQ](https://github.com/OpenHFT/Chronicle-Queue/blob/ea/docs/FAQ.adoc#how-to-change-the-time-that-chronicle-queue-rolls)
+
+- `enableBindingCore`
+  > Allows the entire Sinkin process to run on a dedicated CPU core.
+  > Default: `false`
+
+- `cpu`
+  > Specifies the logical processor for the Sinkin process:
+  > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
+  > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
+  > - `>= 0`: Runs on specifies the logical processor.
+  > Default: `Constance.CPU_TYPE.ANY`
+
+- `enableDisruptorProcessMsgBindingCore`
+  > Allows the Disruptor message processing to run on a dedicated CPU core.
+  > Default: `false`
+
+- `disruptorProcessMsgCpu`
+  > Specifies the logical processor for the Disruptor message processing:
+  > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
+  > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
+  > - `>= 0`: Runs on specifies the logical processor.
+  > Default: `Constance.CPU_TYPE.ANY`
+
+- `enableCheckMissMsgAndSubQueueBindingCore`
+  > Allows the process that checks for missed messages and subscribes to new items in the queue to run on a dedicated CPU core.
+  > Default: `false`
+
+- `checkMissMsgAndSubQueueCpu`
+  > Specifies the logical processor for checking missed messages and subscribing to new queue items:
+  > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
+  > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
+  > - `>= 0`: Runs on specifies the logical processor.
+  > Default: `Constance.CPU_TYPE.ANY`
+
+- `enableSubMsgBindingCore`
+  > Allows the process for subscribing to new messages to run on a dedicated CPU core.
+  > Default: `false`
+
+- `subMsgCpu`
+  > Specifies the logical processor for subscribing to new messages:
+  > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
+  > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
+  > - `>= 0`: Runs on specifies the logical processor.
+  > Default: `Constance.CPU_TYPE.ANY`
   
+
 #### Snipper / Collector (Many to One)
 ![Diagram](https://github.com/vuhoangha/kendrick-store-public/blob/main/Snipper_collector.png?raw=true)
 

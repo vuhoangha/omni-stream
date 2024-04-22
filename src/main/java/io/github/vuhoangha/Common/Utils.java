@@ -98,27 +98,27 @@ public class Utils {
             Thread thread = new Thread(() -> {
                 if (!isMainFlow && (processBindingCore || processCpu >= Constance.CPU_TYPE.ANY)) {
                     // cả Fanout chạy chung 1 CPU core hoặc 1 logical processor
-                    cb.complete(null);
                     coreFunc.run();
+                    cb.complete(null);
                 } else if (enableSpecificBindingCore) {
                     // chạy trên 1 CPU core riêng
                     AffinityLock al = AffinityLock.acquireCore();
-                    cb.complete(al);
                     coreFunc.run();
+                    cb.complete(al);
                 } else if (cpu == Constance.CPU_TYPE.NONE) {
                     // chạy như 1 thread bình thường, do hệ điều hành quản lý và phân phối tới các logical processor
-                    cb.complete(null);
                     coreFunc.run();
+                    cb.complete(null);
                 } else if (cpu == Constance.CPU_TYPE.ANY) {
                     // chạy trên 1 logical processor ngẫu nhiên
                     AffinityLock al = AffinityLock.acquireLock();
-                    cb.complete(al);
                     coreFunc.run();
+                    cb.complete(al);
                 } else if (cpu > Constance.CPU_TYPE.ANY) {
                     // chạy trên 1 logical processor chỉ định
                     AffinityLock al = AffinityLock.acquireLock(cpu);
-                    cb.complete(al);
                     coreFunc.run();
+                    cb.complete(al);
                 } else {
                     // cấu hình lỗi rồi
                     LOGGER.error(MessageFormat.format("Config {0} invalid. Stop now !", name));
