@@ -1,11 +1,15 @@
 package io.github.vuhoangha.ManyToOne;
 
 import com.lmax.disruptor.*;
+import io.github.vuhoangha.Common.OmniWaitStrategy;
 import io.github.vuhoangha.Common.ReflectionUtils;
 import io.github.vuhoangha.Common.Utils;
+import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
 import net.openhft.chronicle.wire.Wire;
 import net.openhft.chronicle.wire.WireType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
@@ -18,6 +22,8 @@ import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.locks.LockSupport;
 
 public class SnipperProcessor implements Runnable {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(SnipperProcessor.class);
 
     private final RingBuffer<SnipperInterMsg> _ring_buffer;
     private final Sequencer _sequencer;
@@ -34,12 +40,15 @@ public class SnipperProcessor implements Runnable {
     private final ConcurrentHashMap<Long, CompletableFuture<Boolean>> _map_item_with_callback;
     // bao lâu quét check timeout 1 lần
     private final long _time_out_interval_ms = 1000;
+    // chiến lược nghỉ ngơi giữa các vòng lặp
+    private final OmniWaitStrategy _wait_strategy;
 
 
     public SnipperProcessor(
             RingBuffer<SnipperInterMsg> ringBuffer,
             ZContext context,
             String socketUrl,
+            OmniWaitStrategy waitStrategy,
             ConcurrentNavigableMap<Long, Long> mapItemWithTime,
             ConcurrentHashMap<Long, CompletableFuture<Boolean>> mapItemWithCallback) {
         this._ring_buffer = ringBuffer;
@@ -48,6 +57,7 @@ public class SnipperProcessor implements Runnable {
         this._socket_url = socketUrl;
         this._map_item_with_time = mapItemWithTime;
         this._map_item_with_callback = mapItemWithCallback;
+        this._wait_strategy = waitStrategy;
     }
 
 
@@ -60,6 +70,8 @@ public class SnipperProcessor implements Runnable {
 
     @Override
     public void run() {
+        LOGGER.info("Snipper run Snipper Processor on logical processor " + Affinity.getCpu());
+
         // khởi tạo socket
         ZMQ.Socket socket = _zContext.createSocket(SocketType.DEALER);
         socket.setRcvHWM(1000000);
@@ -76,6 +88,8 @@ public class SnipperProcessor implements Runnable {
         SnipperInterMsg newEvent;
         long nextTimeCheckTimeout = System.currentTimeMillis() + _time_out_interval_ms;     // lần check timeout tiếp theo
         long id;
+
+        Runnable waiter = OmniWaitStrategy.getWaiter(_wait_strategy);
 
         // luồng chính
         while (_running) {
@@ -125,7 +139,7 @@ public class SnipperProcessor implements Runnable {
             }
 
             // cho CPU nghỉ ngơi 1 chút
-            LockSupport.parkNanos(1);
+            waiter.run();
         }
 
         // đóng socket

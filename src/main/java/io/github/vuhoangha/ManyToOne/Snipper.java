@@ -4,11 +4,19 @@ import com.lmax.disruptor.BlockingWaitStrategy;
 import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
+import io.github.vuhoangha.Common.AffinityCompose;
+import io.github.vuhoangha.Common.Constance;
+import io.github.vuhoangha.Common.OmniWaitStrategy;
+import io.github.vuhoangha.Common.Utils;
+import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.wire.SelfDescribingMarshallable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.zeromq.ZContext;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
@@ -33,15 +41,19 @@ public class Snipper<T extends SelfDescribingMarshallable> {
 
     //region DISRUPTOR
     // disruptor dùng để gom message từ nhiều thread lại và xử lý trong 1 thread duy nhất
-    private final Disruptor<SnipperInterMsg> _disruptor_send_msg;
-    private final RingBuffer<SnipperInterMsg> _ring_buffer_send_msg;
+    private Disruptor<SnipperInterMsg> _disruptor_send_msg;
+    private RingBuffer<SnipperInterMsg> _ring_buffer_send_msg;
     //endregion
 
 
     // zeromq
     private final ZContext _zmq_context;
     // dùng để xử lý gửi/nhận sang Collector
-    private final SnipperProcessor _processor;
+    private SnipperProcessor _processor;
+
+    //region THREAD AFFINITY
+    List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
+    //endregion
 
 
     public Snipper(SnipperCfg cfg) throws Exception {
@@ -60,6 +72,12 @@ public class Snipper<T extends SelfDescribingMarshallable> {
             cfg.setWaitStrategy(new BlockingWaitStrategy());
         if (cfg.getRingBufferSize() == null)
             cfg.setRingBufferSize(2 << 16);     // 131072
+        if (cfg.getDisruptorWaitStrategy() == null)
+            cfg.setDisruptorWaitStrategy(OmniWaitStrategy.YIELD);
+        if (cfg.getDisruptorCpu() == null)
+            cfg.setDisruptorCpu(Constance.CPU_TYPE.ANY);
+        if (cfg.getEnableDisruptorBindingCore() == null)
+            cfg.setEnableDisruptorBindingCore(false);
 
         /*
          * Sử dụng zeromq để gửi nhận dữ liệu giữa source <--> sink
@@ -68,28 +86,44 @@ public class Snipper<T extends SelfDescribingMarshallable> {
          */
         _zmq_context = new ZContext();
 
-        /*
-         * Gom nhiều message được gửi lại và chuyển cho 1 thread gửi đi
-         * đồng thời nhận cả phản hồi từ Collector
-         */
+        _affinity_composes.add(
+                Utils.runWithThreadAffinity(
+                        "Snipper Disruptor",
+                        false,
+                        false,
+                        Constance.CPU_TYPE.NONE,
+                        _cfg.getEnableDisruptorBindingCore(),
+                        _cfg.getDisruptorCpu(),
+                        this::_initDisruptor));
+
+        // được chạy khi JVM bắt đầu quá trình shutdown
+        Runtime.getRuntime().addShutdownHook(new Thread(this::_onShutdown));
+    }
+
+
+    /**
+     * Gom nhiều message được gửi lại và chuyển cho 1 thread gửi đi
+     * đồng thời nhận cả phản hồi từ Collector
+     */
+    private void _initDisruptor() {
+        LOGGER.info("Snipper run Disruptor on logical processor " + Affinity.getCpu());
+
         _disruptor_send_msg = new Disruptor<>(
                 SnipperInterMsg::new,
-                cfg.getRingBufferSize(),
+                _cfg.getRingBufferSize(),
                 Executors.newSingleThreadExecutor(),
                 ProducerType.MULTI,
-                cfg.getWaitStrategy());
+                _cfg.getWaitStrategy());
         _disruptor_send_msg.start();
         _ring_buffer_send_msg = _disruptor_send_msg.getRingBuffer();
         _processor = new SnipperProcessor(
                 _ring_buffer_send_msg,
                 _zmq_context,
                 _cfg.getUrl(),
+                _cfg.getDisruptorWaitStrategy(),
                 _map_item_with_time,
                 _map_item_with_callback);
         new Thread(_processor).start();
-
-        // được chạy khi JVM bắt đầu quá trình shutdown
-        Runtime.getRuntime().addShutdownHook(new Thread(this::_onShutdown));
     }
 
 
@@ -123,16 +157,27 @@ public class Snipper<T extends SelfDescribingMarshallable> {
 
 
     private void _onShutdown() {
+        LOGGER.info("Snipper closing...");
+
         _map_item_with_time.clear();
         _map_item_with_callback.clear();
 
         // disruptor
         _disruptor_send_msg.shutdown();
         _processor.halt();                      // stop processor
-        LockSupport.parkNanos(1_000_000_000);   // tạm ngừng để xử lý nốt msg trong ring buffer
+        LockSupport.parkNanos(500_000_000);   // tạm ngừng để xử lý nốt msg trong ring buffer
 
         // zmq
         _zmq_context.destroy();
+
+        // giải phóng các CPU core / Logical processor đã sử dụng
+        for (AffinityCompose affinityCompose : _affinity_composes) {
+            affinityCompose.release();
+        }
+
+        LockSupport.parkNanos(500_000_000);
+
+        LOGGER.info("Snipper SHUTDOWN !");
     }
 
 }

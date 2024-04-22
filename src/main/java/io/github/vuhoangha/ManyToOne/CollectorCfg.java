@@ -1,5 +1,7 @@
 package io.github.vuhoangha.ManyToOne;
 
+import io.github.vuhoangha.Common.OmniWaitStrategy;
+import io.github.vuhoangha.OneToMany.SinkinCfg;
 import net.openhft.chronicle.queue.rollcycles.LargeRollCycles;
 
 import java.text.MessageFormat;
@@ -30,6 +32,39 @@ public class CollectorCfg {
      */
     private LargeRollCycles rollCycles;
 
+    // kiểu WaitStrategy được sử dụng lắng nghe các item mới được ghi vào queue
+    private OmniWaitStrategy queueWaitStrategy;
+
+    // cho phép ZMQ Router chạy trên 1 CPU core riêng ?
+    private Boolean enableZRouterBindingCore;
+
+    /*
+     * cho phép ZMQ Router chạy trên 1 logical processor riêng ?
+     *      "-1" là chạy trên 1 logical processor bất kỳ. Nếu có Logical Processor isolate dự trữ thì nó sẽ ưu tiên chạy trước. Nếu ko sẽ dùng chung với hệ điều hành
+     *      "-2": chạy trên nhiều logical processor bất kỳ theo sự điều phối của hệ điều hành
+     */
+    private Integer zRouterCpu;
+
+    // cho phép Listener Queue chạy trên 1 CPU core riêng ?
+    private Boolean enableQueueBindingCore;
+
+    /*
+     * cho phép Listener Queue chạy trên 1 logical processor riêng ?
+     *      "-1" là chạy trên 1 logical processor bất kỳ. Nếu có Logical Processor isolate dự trữ thì nó sẽ ưu tiên chạy trước. Nếu ko sẽ dùng chung với hệ điều hành
+     *      "-2": chạy trên nhiều logical processor bất kỳ theo sự điều phối của hệ điều hành
+     */
+    private Integer queueCpu;
+
+    // cho phép toàn bộ Collector chạy chung trên 1 CPU core riêng ?
+    private Boolean enableBindingCore;
+
+    /*
+     * cho phép Collector chạy chung trên 1 logical processor riêng ?
+     *      "-1" là chạy trên 1 logical processor bất kỳ. Nếu có Logical Processor isolate dự trữ thì nó sẽ ưu tiên chạy trước. Nếu ko sẽ dùng chung với hệ điều hành
+     *      "-2": chạy trên nhiều logical processor bất kỳ theo sự điều phối của hệ điều hành
+     */
+    private Integer cpu;
+
 
     public CollectorCfg() {
     }
@@ -38,6 +73,69 @@ public class CollectorCfg {
         return new CollectorCfg();
     }
 
+
+    public Integer getCpu() {
+        return cpu;
+    }
+
+    public CollectorCfg setCpu(Integer cpu) {
+        this.cpu = cpu;
+        return this;
+    }
+
+    public Boolean getEnableBindingCore() {
+        return enableBindingCore;
+    }
+
+    public CollectorCfg setEnableBindingCore(Boolean enableBindingCore) {
+        this.enableBindingCore = enableBindingCore;
+        return this;
+    }
+
+    public Integer getZRouterCpu() {
+        return zRouterCpu;
+    }
+
+    public CollectorCfg setZRouterCpu(Integer zRouterCpu) {
+        this.zRouterCpu = zRouterCpu;
+        return this;
+    }
+
+    public Boolean getEnableZRouterBindingCore() {
+        return enableZRouterBindingCore;
+    }
+
+    public CollectorCfg setEnableZRouterBindingCore(Boolean enableZRouterBindingCore) {
+        this.enableZRouterBindingCore = enableZRouterBindingCore;
+        return this;
+    }
+
+    public Integer getQueueCpu() {
+        return queueCpu;
+    }
+
+    public CollectorCfg setQueueCpu(Integer queueCpu) {
+        this.queueCpu = queueCpu;
+        return this;
+    }
+
+    public Boolean getEnableQueueBindingCore() {
+        return enableQueueBindingCore;
+    }
+
+    public CollectorCfg setEnableQueueBindingCore(Boolean enableQueueBindingCore) {
+        this.enableQueueBindingCore = enableQueueBindingCore;
+        return this;
+    }
+
+    public OmniWaitStrategy getQueueWaitStrategy() {
+        return queueWaitStrategy;
+    }
+
+    public CollectorCfg setQueueWaitStrategy(OmniWaitStrategy queueWaitStrategy) {
+        this.queueWaitStrategy = queueWaitStrategy;
+        return this;
+    }
 
     public LargeRollCycles getRollCycles() {
         return rollCycles;

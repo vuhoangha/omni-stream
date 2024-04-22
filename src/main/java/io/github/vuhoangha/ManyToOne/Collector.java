@@ -1,6 +1,10 @@
 package io.github.vuhoangha.ManyToOne;
 
+import io.github.vuhoangha.Common.AffinityCompose;
+import io.github.vuhoangha.Common.Constance;
+import io.github.vuhoangha.Common.OmniWaitStrategy;
 import io.github.vuhoangha.Common.Utils;
+import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
 import net.openhft.chronicle.queue.ExcerptAppender;
 import net.openhft.chronicle.queue.ExcerptTailer;
@@ -17,6 +21,9 @@ import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.BiConsumer;
 
@@ -45,6 +52,11 @@ public class Collector<T extends SelfDescribingMarshallable> {
     //endregion
 
 
+    //region THREAD AFFINITY
+    List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
+    //endregion
+
+
     public Collector(CollectorCfg cfg, Class<T> dataType, BiConsumer<T, Long> handler) throws Exception {
         _status = RUNNING;
         _cfg = cfg;
@@ -68,6 +80,20 @@ public class Collector<T extends SelfDescribingMarshallable> {
             cfg.setStartId(-2l);
         if (cfg.getRollCycles() == null)
             cfg.setRollCycles(LargeRollCycles.LARGE_DAILY);
+        if (cfg.getQueueWaitStrategy() == null)
+            cfg.setQueueWaitStrategy(OmniWaitStrategy.YIELD);
+        if (cfg.getEnableBindingCore() == null)
+            cfg.setEnableBindingCore(false);
+        if (cfg.getCpu() == null)
+            cfg.setCpu(Constance.CPU_TYPE.ANY);
+        if (cfg.getEnableQueueBindingCore() == null)
+            cfg.setEnableQueueBindingCore(false);
+        if (cfg.getQueueCpu() == null)
+            cfg.setQueueCpu(Constance.CPU_TYPE.NONE);
+        if (cfg.getEnableZRouterBindingCore() == null)
+            cfg.setEnableZRouterBindingCore(false);
+        if (cfg.getZRouterCpu() == null)
+            cfg.setZRouterCpu(Constance.CPU_TYPE.NONE);
 
         // Chronicle queue
         _queue = SingleChronicleQueueBuilder
@@ -75,16 +101,55 @@ public class Collector<T extends SelfDescribingMarshallable> {
                 .rollCycle(cfg.getRollCycles())
                 .build();
 
-        // sub queue and msg
-        new Thread(this::_subQueue).start();
-        new Thread(this::_subMsg).start();
+        // main flow
+        _affinity_composes.add(
+                Utils.runWithThreadAffinity(
+                        "Collector ALL",
+                        true,
+                        _cfg.getEnableBindingCore(),
+                        _cfg.getCpu(),
+                        _cfg.getEnableBindingCore(),
+                        _cfg.getCpu(),
+                        this::_initMainFlow));
 
         // được chạy khi JVM bắt đầu quá trình shutdown
         Runtime.getRuntime().addShutdownHook(new Thread(this::_onShutdown));
     }
 
 
+    /**
+     * Chạy luồng chính
+     */
+    private void _initMainFlow() {
+        LOGGER.info("Collector run Main Flow on logical processor " + Affinity.getCpu());
+
+        // sub queue
+        _affinity_composes.add(
+                Utils.runWithThreadAffinity(
+                        "Collector Queue",
+                        false,
+                        _cfg.getEnableBindingCore(),
+                        _cfg.getCpu(),
+                        _cfg.getEnableQueueBindingCore(),
+                        _cfg.getQueueCpu(),
+                        () -> new Thread(this::_subQueue).start()));
+
+        // sub msg
+        _affinity_composes.add(
+                Utils.runWithThreadAffinity(
+                        "Collector Router",
+                        false,
+                        _cfg.getEnableBindingCore(),
+                        _cfg.getCpu(),
+                        _cfg.getEnableZRouterBindingCore(),
+                        _cfg.getZRouterCpu(),
+                        () -> new Thread(this::_subMsg).start()));
+    }
+
+
     private void _subMsg() {
+        LOGGER.info("Collector run Sub Msg on logical processor " + Affinity.getCpu());
+
         // dùng để ghi dữ liệu vào queue
         ExcerptAppender appender = _queue.acquireAppender();
 
@@ -134,9 +199,13 @@ public class Collector<T extends SelfDescribingMarshallable> {
 
     // lắng nghe event được ghi vào queue
     private void _subQueue() {
+        LOGGER.info("Collector run Sub Queue on logical processor " + Affinity.getCpu());
+
         Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
         Wire wire = WireType.BINARY.apply(bytes);
         T objT = _eventFactory();
+
+        Runnable waiter = OmniWaitStrategy.getWaiter(_cfg.getQueueWaitStrategy());
 
         // tạo 1 tailer. Mặc định nó sẽ đọc từ lần cuối cùng nó đọc
         ExcerptTailer tailer = _queue.createTailer(_cfg.getReaderName());
@@ -164,17 +233,7 @@ public class Collector<T extends SelfDescribingMarshallable> {
                 bytes.clear();
                 wire.clear();
             } else {
-                /*
-                 * ở đây có 2 option
-                 *      Thread.yield(): nhường CPU cho thread khác thực thi. Nếu ko có thread nào thì lại chạy tiếp Thread.yield()
-                 *      LockSupport.parkNanos(1): cho CPU nghỉ ngơi 1 nanoseconds.
-                 *          Thời gian nghỉ thực tế phụ thuộc vào hệ điều hành.
-                 *          Linux thông thường là 60 microseconds
-                 *          Do thời gian nghỉ ngơi quá nhỏ, nhân kernel trong linux phải gom các tiến trình lại để đánh thức nó dậy cùng 1 lúc
-                 *          Nếu thời gian nhỏ quá, điều này có thể phản tác dụng vì CPU ko nghỉ được nhiều mà còn tốn thêm thời gian lập lịch cho Thread này
-                 *          Tham khảo: https://hazelcast.com/blog/locksupport-parknanos-under-the-hood-and-the-curious-case-of-parking/
-                 */
-                LockSupport.parkNanos(1);
+                waiter.run();
             }
         }
 
@@ -197,10 +256,16 @@ public class Collector<T extends SelfDescribingMarshallable> {
     private void _onShutdown() {
         _status = STOPPED;
 
-        // chờ các hành động xử lý nốt
-        LockSupport.parkNanos(1_000_000_000);
+        LockSupport.parkNanos(500_000_000);
 
         _queue.close();
+
+        // giải phóng các CPU core / Logical processor đã sử dụng
+        for (AffinityCompose affinityCompose : _affinity_composes) {
+            affinityCompose.release();
+        }
+
+        LockSupport.parkNanos(500_000_000);
     }
 
 }

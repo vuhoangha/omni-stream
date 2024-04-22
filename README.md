@@ -347,7 +347,7 @@ The Sinkin class handles receiving messages from the Fanout host and ensures the
   > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
   > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
   > - `>= 0`: Runs on specifies the logical processor.
-  > Default: `Constance.CPU_TYPE.NONE`
+  > Default: `Constance.CPU_TYPE.ANY`
 
 - `enableDisruptorBindingCore`
   > Allows the Lmax Disruptor to run on a dedicated CPU core.
@@ -358,7 +358,7 @@ The Sinkin class handles receiving messages from the Fanout host and ensures the
   > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
   > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
   > - `>= 0`: Runs on specifies the logical processor.
-      > Default: `Constance.CPU_TYPE.ANY`
+      > Default: `Constance.CPU_TYPE.NONE`
 
 - `enableQueueBindingCore`
   > Allows the Chronicle Queue to run on a dedicated CPU core.
@@ -369,7 +369,7 @@ The Sinkin class handles receiving messages from the Fanout host and ensures the
   > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
   > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
   > - `>= 0`: Runs on specifies the logical processor.
-      > Default: `Constance.CPU_TYPE.ANY`
+      > Default: `Constance.CPU_TYPE.NONE`
 
 - `enableHandleConfirmBindingCore`
   > Allows the confirm handler to run on a dedicated CPU core.
@@ -380,7 +380,7 @@ The Sinkin class handles receiving messages from the Fanout host and ensures the
   > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
   > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
   > - `>= 0`: Runs on specifies the logical processor.
-      > Default: `Constance.CPU_TYPE.ANY`
+      > Default: `Constance.CPU_TYPE.NONE`
 
 ##### Sinkin Config
 - `queuePath *`
@@ -460,7 +460,7 @@ The Sinkin class handles receiving messages from the Fanout host and ensures the
   > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
   > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
   > - `>= 0`: Runs on specifies the logical processor.
-  > Default: `Constance.CPU_TYPE.ANY`
+  > Default: `Constance.CPU_TYPE.NONE`
 
 - `enableCheckMissMsgAndSubQueueBindingCore`
   > Allows the process that checks for missed messages and subscribes to new items in the queue to run on a dedicated CPU core.
@@ -471,7 +471,7 @@ The Sinkin class handles receiving messages from the Fanout host and ensures the
   > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
   > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
   > - `>= 0`: Runs on specifies the logical processor.
-  > Default: `Constance.CPU_TYPE.ANY`
+  > Default: `Constance.CPU_TYPE.NONE`
 
 - `enableSubMsgBindingCore`
   > Allows the process for subscribing to new messages to run on a dedicated CPU core.
@@ -482,7 +482,7 @@ The Sinkin class handles receiving messages from the Fanout host and ensures the
   > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
   > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
   > - `>= 0`: Runs on specifies the logical processor.
-  > Default: `Constance.CPU_TYPE.ANY`
+  > Default: `Constance.CPU_TYPE.NONE`
 
 - `queueWaitStrategy`
   > The wait strategy of the Processor for new messages from Chronicle Queue.
@@ -534,6 +534,43 @@ The Collector class handles the centralized collection and processing of message
 - `startId`
   > Starting index from which the queue will be read. If set to `-1`, the reading will begin from the start of the queue.
 
+- `queueWaitStrategy`
+  > The wait strategy used for listening to new items written to the queue. OmniWaitStrategy optimizes performance by reducing CPU usage while waiting.
+  > Default: `OmniWaitStrategy.YIELD`
+
+- `enableBindingCore`
+  > Allows the entire Collector process to run on a dedicated CPU core.
+  > Default: `false`
+
+- `cpu`
+  > Specifies the logical processor for the entire Collector process:
+  > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
+  > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
+  > - `>= 0`: Runs on specifies the logical processor.
+  > Default: `Constance.CPU_TYPE.ANY`
+
+- `enableZRouterBindingCore`
+  > Allows the ZeroMQ Router to run on a dedicated CPU core.
+  > Default: `false`
+
+- `zRouterCpu`
+  > Specifies the logical processor for the ZeroMQ Router:
+  > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
+  > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
+  > - `>= 0`: Runs on specifies the logical processor.
+  > Default: `Constance.CPU_TYPE.NONE`
+
+- `enableQueueBindingCore`
+  > Allows the Queue Listener to run on a dedicated CPU core.
+  > Default: `false`
+
+- `queueCpu`
+  > Specifies the logical processor for the Queue Listener:
+  > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
+  > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
+  > - `>= 0`: Runs on specifies the logical processor.
+  > Default: `Constance.CPU_TYPE.NONE`
+
 
 ##### Snipper Config
 - `collectorIP *`
@@ -555,6 +592,21 @@ The Collector class handles the centralized collection and processing of message
 - `ringBufferSize`
   > Size of the Disruptor's ring buffer for sending/receiving messages. Must be a power of two to ensure efficient data handling.
   > Default: `131,072`
+
+- `disruptorWaitStrategy`
+  > The wait strategy of the Processor for new messages from application.
+  > Default: `OmniWaitStrategy.YIELD`
+
+- `enableDisruptorBindingCore`
+  > Allows the Disruptor message processing to run on a dedicated CPU core.
+  > Default: `false`
+
+- `disruptorCpu`
+  > Specifies the logical processor for the Disruptor message processing:
+  > - `Constance.CPU_TYPE.ANY`: Runs on any available logical processor, prioritizing isolated ones if available.
+  > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
+  > - `>= 0`: Runs on specifies the logical processor.
+      > Default: `Constance.CPU_TYPE.ANY` 
 
   
 ## Documentation

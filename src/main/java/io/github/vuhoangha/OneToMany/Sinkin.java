@@ -144,19 +144,19 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         if (cfg.getEnableBindingCore() == null)
             cfg.setEnableBindingCore(false);
         if (cfg.getCpu() == null)
-            cfg.setCpu(Constance.CPU_TYPE.NONE);
+            cfg.setCpu(Constance.CPU_TYPE.ANY);
         if (cfg.getEnableDisruptorProcessMsgBindingCore() == null)
             cfg.setEnableDisruptorProcessMsgBindingCore(false);
         if (cfg.getDisruptorProcessMsgCpu() == null)
-            cfg.setDisruptorProcessMsgCpu(Constance.CPU_TYPE.ANY);
+            cfg.setDisruptorProcessMsgCpu(Constance.CPU_TYPE.NONE);
         if (cfg.getEnableCheckMissMsgAndSubQueueBindingCore() == null)
             cfg.setEnableCheckMissMsgAndSubQueueBindingCore(false);
         if (cfg.getCheckMissMsgAndSubQueueCpu() == null)
-            cfg.setCheckMissMsgAndSubQueueCpu(Constance.CPU_TYPE.ANY);
+            cfg.setCheckMissMsgAndSubQueueCpu(Constance.CPU_TYPE.NONE);
         if (cfg.getEnableSubMsgBindingCore() == null)
             cfg.setEnableSubMsgBindingCore(false);
         if (cfg.getSubMsgCpu() == null)
-            cfg.setSubMsgCpu(Constance.CPU_TYPE.ANY);
+            cfg.setSubMsgCpu(Constance.CPU_TYPE.NONE);
 
 
         this._dataType = dataType;
