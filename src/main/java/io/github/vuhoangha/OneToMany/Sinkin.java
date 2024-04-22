@@ -506,7 +506,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
                 if (_byte_miss_msg_raw == null) {
                     LOGGER.error("Rep latest msg empty. Maybe TIMEOUT !");
                     isSuccess = false;
-                } else {
+                } else if (_byte_miss_msg_raw.length > 0) {
                     _byte_miss_msg.write(_byte_miss_msg_raw);
                     _ring_buffer_process_msg.publishEvent(
                             (newEvent, sequence, __type, __bytesParam) -> {
@@ -540,7 +540,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
                 if (_byte_miss_msg_raw == null) {
                     LOGGER.error(MessageFormat.format("Rep items from {0} - to {1} fail. Maybe TIMEOUT !", msg.getIndexFrom(), msg.getIndexTo()));
                     isSuccess = false;
-                } else {
+                } else if (_byte_miss_msg_raw.length > 0) {
                     _byte_miss_msg.write(_byte_miss_msg_raw);
                     _ring_buffer_process_msg.publishEvent(
                             (newEvent, sequence, __type, __bytesParam) -> {
