@@ -1,5 +1,6 @@
 package io.github.vuhoangha.ManyToOne;
 
+import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.OmniWaitStrategy;
 import io.github.vuhoangha.OneToMany.SinkinCfg;
 import net.openhft.chronicle.queue.rollcycles.LargeRollCycles;
@@ -66,11 +67,25 @@ public class CollectorCfg {
     private Integer cpu;
 
 
-    public CollectorCfg() {
+    private CollectorCfg() {
     }
 
     public static CollectorCfg builder() {
-        return new CollectorCfg();
+        CollectorCfg cfg = new CollectorCfg();
+
+        // set default value
+        cfg.setPort(5557);
+        cfg.setStartId(-2L);
+        cfg.setRollCycles(LargeRollCycles.LARGE_DAILY);
+        cfg.setQueueWaitStrategy(OmniWaitStrategy.YIELD);
+        cfg.setEnableBindingCore(false);
+        cfg.setCpu(Constance.CPU_TYPE.ANY);
+        cfg.setEnableQueueBindingCore(false);
+        cfg.setQueueCpu(Constance.CPU_TYPE.NONE);
+        cfg.setEnableZRouterBindingCore(false);
+        cfg.setZRouterCpu(Constance.CPU_TYPE.NONE);
+
+        return cfg;
     }
 
 

@@ -41,7 +41,7 @@ public class Snipper<T extends SelfDescribingMarshallable> {
     private final AtomicLong _sequence_id = new AtomicLong(System.currentTimeMillis());
 
 
-    public Snipper(SnipperCfg cfg) throws Exception {
+    public Snipper(SnipperCfg cfg) {
         // validate
         Utils.checkNull(cfg.getCollectorIP(), "Require collectorIP");
 

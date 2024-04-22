@@ -1,7 +1,6 @@
 package io.github.vuhoangha.ManyToOne;
 
 import io.github.vuhoangha.Common.AffinityCompose;
-import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.OmniWaitStrategy;
 import io.github.vuhoangha.Common.Utils;
 import net.openhft.affinity.Affinity;
@@ -10,7 +9,6 @@ import net.openhft.chronicle.queue.ExcerptAppender;
 import net.openhft.chronicle.queue.ExcerptTailer;
 import net.openhft.chronicle.queue.impl.single.SingleChronicleQueue;
 import net.openhft.chronicle.queue.impl.single.SingleChronicleQueueBuilder;
-import net.openhft.chronicle.queue.rollcycles.LargeRollCycles;
 import net.openhft.chronicle.wire.SelfDescribingMarshallable;
 import net.openhft.chronicle.wire.Wire;
 import net.openhft.chronicle.wire.WireType;
@@ -29,79 +27,34 @@ import java.util.function.BiConsumer;
 
 public class Collector<T extends SelfDescribingMarshallable> {
 
+    private static final int IDLE = 0, RUNNING = 1, STOPPED = 2;
+    private int _status = IDLE;
+
     private static final Logger LOGGER = LoggerFactory.getLogger(Collector.class);
-
-    // config cho collector
     private final CollectorCfg _cfg;
-
     private final Class<T> _dataType;
     private final BiConsumer<T, Long> _handler;
-
-    //region STATUS
-    private static final int IDLE = 0;                          // nằm im
-    private static final int RUNNING = IDLE + 1;                // đang chạy
-    private static final int STOPPED = RUNNING + 1;             // đã dừng
-
-    private int _status = IDLE;      // quản lý trạng thái hiện tại
-    //endregion
-
-
-    //region CHRONICLE QUEUE
-    // connect tới folder chứa queue data. SingleChronicleQueue chỉ cho phép 1 người ghi cùng lúc
     private final SingleChronicleQueue _queue;
-    //endregion
-
-
-    //region THREAD AFFINITY
     List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
-    //endregion
 
 
-    public Collector(CollectorCfg cfg, Class<T> dataType, BiConsumer<T, Long> handler) throws Exception {
-        _status = RUNNING;
-        _cfg = cfg;
-        this._dataType = dataType;
-        this._handler = handler;
-
+    public Collector(CollectorCfg cfg, Class<T> dataType, BiConsumer<T, Long> handler) {
         // validate
-        if (cfg.getQueuePath() == null)
-            throw new Exception("Require queuePath");
-        if (cfg.getReaderName() == null)
-            throw new Exception("Require readerName");
-        if (dataType == null)
-            throw new Exception("Require dataType");
-        if (handler == null)
-            throw new Exception("Require handler");
+        Utils.checkNull(cfg.getQueuePath(), "Require queuePath");
+        Utils.checkNull(cfg.getReaderName(), "Require readerName");
+        Utils.checkNull(dataType, "Require dataType");
+        Utils.checkNull(handler, "Require handler");
 
-        // set default value
-        if (cfg.getPort() == null)
-            cfg.setPort(5557);
-        if (cfg.getStartId() == null)
-            cfg.setStartId(-2l);
-        if (cfg.getRollCycles() == null)
-            cfg.setRollCycles(LargeRollCycles.LARGE_DAILY);
-        if (cfg.getQueueWaitStrategy() == null)
-            cfg.setQueueWaitStrategy(OmniWaitStrategy.YIELD);
-        if (cfg.getEnableBindingCore() == null)
-            cfg.setEnableBindingCore(false);
-        if (cfg.getCpu() == null)
-            cfg.setCpu(Constance.CPU_TYPE.ANY);
-        if (cfg.getEnableQueueBindingCore() == null)
-            cfg.setEnableQueueBindingCore(false);
-        if (cfg.getQueueCpu() == null)
-            cfg.setQueueCpu(Constance.CPU_TYPE.NONE);
-        if (cfg.getEnableZRouterBindingCore() == null)
-            cfg.setEnableZRouterBindingCore(false);
-        if (cfg.getZRouterCpu() == null)
-            cfg.setZRouterCpu(Constance.CPU_TYPE.NONE);
+        _cfg = cfg;
+        _dataType = dataType;
+        _handler = handler;
+        _status = RUNNING;
 
-        // Chronicle queue
         _queue = SingleChronicleQueueBuilder
                 .binary(_cfg.getQueuePath())
                 .rollCycle(cfg.getRollCycles())
                 .build();
 
-        // main flow
         _affinity_composes.add(
                 Utils.runWithThreadAffinity(
                         "Collector ALL",
@@ -121,7 +74,7 @@ public class Collector<T extends SelfDescribingMarshallable> {
      * Chạy luồng chính
      */
     private void _initMainFlow() {
-        LOGGER.info("Collector run Main Flow on logical processor " + Affinity.getCpu());
+        LOGGER.info("Collector run Main Flow on logical processor {}", Affinity.getCpu());
 
         // sub queue
         _affinity_composes.add(
@@ -148,9 +101,8 @@ public class Collector<T extends SelfDescribingMarshallable> {
 
 
     private void _subMsg() {
-        LOGGER.info("Collector run Sub Msg on logical processor " + Affinity.getCpu());
+        LOGGER.info("Collector run Sub Msg on logical processor {}", Affinity.getCpu());
 
-        // dùng để ghi dữ liệu vào queue
         ExcerptAppender appender = _queue.acquireAppender();
 
         try (ZContext context = new ZContext()) {
@@ -167,44 +119,45 @@ public class Collector<T extends SelfDescribingMarshallable> {
             Bytes<ByteBuffer> bytesData = Bytes.elasticByteBuffer();
             long reqId;
 
-            while (_status == RUNNING) {
-                clientAddress = socket.recv(0);
-                request = socket.recv(0);
-                bytesTotal.write(request);
+            try {
+                while (_status == RUNNING) {
+                    clientAddress = socket.recv(0);
+                    request = socket.recv(0);
+                    bytesTotal.write(request);
 
-                // lưu vào queue
-                reqId = bytesTotal.readLong();
-                bytesTotal.read(bytesData);
-                appender.writeBytes(bytesData);
+                    // lưu vào queue
+                    reqId = bytesTotal.readLong();
+                    bytesTotal.read(bytesData);
+                    appender.writeBytes(bytesData);
 
-                // gửi cho Snipper confirm nhận được
-                socket.send(clientAddress, ZMQ.SNDMORE);
-                socket.send(Utils.longToBytes(reqId), 0);
+                    // gửi cho Snipper confirm nhận được
+                    socket.send(clientAddress, ZMQ.SNDMORE);
+                    socket.send(Utils.longToBytes(reqId), 0);
 
-                // clear
-                bytesTotal.clear();
-                bytesData.clear();
+                    // clear
+                    bytesTotal.clear();
+                    bytesData.clear();
+                }
+            } catch (Exception ex) {
+                LOGGER.error("Collector Sub Msg error", ex);
             }
 
             // close & release
             bytesTotal.releaseLast();
             bytesData.releaseLast();
             socket.close();
+            appender.close();
         }
-
-        // close & release
-        appender.close();
     }
 
 
     // lắng nghe event được ghi vào queue
     private void _subQueue() {
-        LOGGER.info("Collector run Sub Queue on logical processor " + Affinity.getCpu());
+        LOGGER.info("Collector run Sub Queue on logical processor {}", Affinity.getCpu());
 
         Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
         Wire wire = WireType.BINARY.apply(bytes);
         T objT = _eventFactory();
-
         Runnable waiter = OmniWaitStrategy.getWaiter(_cfg.getQueueWaitStrategy());
 
         // tạo 1 tailer. Mặc định nó sẽ đọc từ lần cuối cùng nó đọc
@@ -223,18 +176,22 @@ public class Collector<T extends SelfDescribingMarshallable> {
             }
         }
 
-        while (_status == RUNNING) {
-            if (tailer.readBytes(bytes)) {
-                // deserialize binary sang T
-                objT.readMarshallable(wire);
+        try {
+            while (_status == RUNNING) {
+                if (tailer.readBytes(bytes)) {
+                    // deserialize binary sang T
+                    objT.readMarshallable(wire);
 
-                _handler.accept(objT, tailer.lastReadIndex());
+                    _handler.accept(objT, tailer.lastReadIndex());
 
-                bytes.clear();
-                wire.clear();
-            } else {
-                waiter.run();
+                    bytes.clear();
+                    wire.clear();
+                } else {
+                    waiter.run();
+                }
             }
+        } catch (Exception ex) {
+            LOGGER.error("Collector SubQueue error", ex);
         }
 
         bytes.releaseLast();
@@ -246,8 +203,8 @@ public class Collector<T extends SelfDescribingMarshallable> {
     private T _eventFactory() {
         try {
             return _dataType.newInstance();
-        } catch (InstantiationException | IllegalAccessException e) {
-            e.printStackTrace();
+        } catch (Exception ex) {
+            LOGGER.error("Collector EventFactory error", ex);
             return null;
         }
     }
