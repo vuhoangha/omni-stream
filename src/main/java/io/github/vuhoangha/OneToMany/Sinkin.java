@@ -4,10 +4,7 @@ import com.lmax.disruptor.BlockingWaitStrategy;
 import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
-import io.github.vuhoangha.Common.AffinityCompose;
-import io.github.vuhoangha.Common.Constance;
-import io.github.vuhoangha.Common.ObjectPool;
-import io.github.vuhoangha.Common.Utils;
+import io.github.vuhoangha.Common.*;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
 import net.openhft.chronicle.core.io.ReferenceOwner;
@@ -142,21 +139,20 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
             cfg.setRingBufferSize(2 << 16);     // 131072
         if (cfg.getRollCycles() == null)
             cfg.setRollCycles(LargeRollCycles.LARGE_DAILY);
+        if (cfg.getQueueWaitStrategy() == null)
+            cfg.setQueueWaitStrategy(OmniWaitStrategy.YIELD);
         if (cfg.getEnableBindingCore() == null)
             cfg.setEnableBindingCore(false);
         if (cfg.getCpu() == null)
             cfg.setCpu(Constance.CPU_TYPE.NONE);
-
         if (cfg.getEnableDisruptorProcessMsgBindingCore() == null)
             cfg.setEnableDisruptorProcessMsgBindingCore(false);
         if (cfg.getDisruptorProcessMsgCpu() == null)
             cfg.setDisruptorProcessMsgCpu(Constance.CPU_TYPE.ANY);
-
         if (cfg.getEnableCheckMissMsgAndSubQueueBindingCore() == null)
             cfg.setEnableCheckMissMsgAndSubQueueBindingCore(false);
         if (cfg.getCheckMissMsgAndSubQueueCpu() == null)
             cfg.setCheckMissMsgAndSubQueueCpu(Constance.CPU_TYPE.ANY);
-
         if (cfg.getEnableSubMsgBindingCore() == null)
             cfg.setEnableSubMsgBindingCore(false);
         if (cfg.getSubMsgCpu() == null)
@@ -689,6 +685,8 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         T objT = _eventFactory();
         long id;    // đưa ra cho người dùng bên ngoài đổi từ "index" sang "id"
 
+        Runnable waiter = OmniWaitStrategy.getWaiter(_cfg.getQueueWaitStrategy());
+
         while (_status == RUNNING) {
             if (tailer.readBytes(byte_read)) {
                 version = byte_read.readByte();   // version
@@ -704,8 +702,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
                 wire_msg_data.clear();
                 byte_msg_data.clear();
             } else {
-                // xem phần chú thích bên Fanout
-                LockSupport.parkNanos(1);   // nghỉ 5ms
+                waiter.run();
             }
         }
 

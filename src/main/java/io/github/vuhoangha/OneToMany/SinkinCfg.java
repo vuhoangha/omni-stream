@@ -1,6 +1,7 @@
 package io.github.vuhoangha.OneToMany;
 
 import com.lmax.disruptor.WaitStrategy;
+import io.github.vuhoangha.Common.OmniWaitStrategy;
 import net.openhft.chronicle.queue.rollcycles.LargeRollCycles;
 
 import java.text.MessageFormat;
@@ -98,12 +99,24 @@ public class SinkinCfg {
      */
     private Integer subMsgCpu;
 
+    // kiểu WaitStrategy được sử dụng lắng nghe các item mới được ghi vào queue
+    private OmniWaitStrategy queueWaitStrategy;
+
 
     public SinkinCfg() {
     }
 
     public static SinkinCfg builder() {
         return new SinkinCfg();
+    }
+
+    public OmniWaitStrategy getQueueWaitStrategy() {
+        return queueWaitStrategy;
+    }
+
+    public SinkinCfg setQueueWaitStrategy(OmniWaitStrategy queueWaitStrategy) {
+        this.queueWaitStrategy = queueWaitStrategy;
+        return this;
     }
 
     public Integer getSubMsgCpu() {

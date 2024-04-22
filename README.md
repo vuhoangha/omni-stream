@@ -483,6 +483,10 @@ The Sinkin class handles receiving messages from the Fanout host and ensures the
   > - `Constance.CPU_TYPE.NONE`: Runs on multiple logical processors as managed by the operating system.
   > - `>= 0`: Runs on specifies the logical processor.
   > Default: `Constance.CPU_TYPE.ANY`
+
+- `queueWaitStrategy`
+  > The wait strategy of the Processor for new messages from Chronicle Queue.
+  > Default: `OmniWaitStrategy.YIELD`
   
 
 #### Snipper / Collector (Many to One)
