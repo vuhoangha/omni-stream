@@ -323,7 +323,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
                         _cfg.getCpu(),
                         _cfg.getEnableSubMsgBindingCore(),
                         _cfg.getSubMsgCpu(),
-                        new Thread(this::_subMsg)));
+                        () -> new Thread(this::_subMsg).start()));
     }
 
 

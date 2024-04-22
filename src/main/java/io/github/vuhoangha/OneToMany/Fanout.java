@@ -202,7 +202,7 @@ public class Fanout<T extends SelfDescribingMarshallable> {
                         _cfg.getCpu(),
                         _cfg.getEnableHandleConfirmBindingCore(),
                         _cfg.getHandleConfirmCpu(),
-                        new Thread(this::_initHandlerConfirm)));
+                        () -> new Thread(this::_initHandlerConfirm).start()));
 
         // được chạy khi JVM bắt đầu quá trình shutdown
         Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown));
