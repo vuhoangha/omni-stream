@@ -141,4 +141,13 @@ public class Utils {
         }
     }
 
+
+    public static void checkNull(Object obj, String errorMessage) {
+        if (obj == null) {
+            LOGGER.error(errorMessage);
+            throw new IllegalArgumentException(errorMessage);
+        }
+    }
+
+
 }

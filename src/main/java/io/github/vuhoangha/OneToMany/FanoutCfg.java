@@ -1,6 +1,8 @@
 package io.github.vuhoangha.OneToMany;
 
 import com.lmax.disruptor.WaitStrategy;
+import com.lmax.disruptor.YieldingWaitStrategy;
+import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.OmniWaitStrategy;
 import net.openhft.chronicle.queue.rollcycles.LargeRollCycles;
 
@@ -92,11 +94,32 @@ public class FanoutCfg {
     private Integer handleConfirmCpu;
 
 
-    public FanoutCfg() {
+    private FanoutCfg() {
     }
 
     public static FanoutCfg builder() {
-        return new FanoutCfg();
+        FanoutCfg cfg = new FanoutCfg();
+
+        // assign default value
+        cfg.setRealtimePort(5555);
+        cfg.setConfirmPort(5556);
+        cfg.setNumberMsgInBatch(10000);
+        cfg.setMaxNumberMsgInCachePub(1000000);
+        cfg.setVersion((byte) -128);
+        cfg.setDisruptorWaitStrategy(new YieldingWaitStrategy());
+        cfg.setRingBufferSize(2 << 16);     // 131072
+        cfg.setRollCycles(LargeRollCycles.LARGE_DAILY);
+        cfg.setQueueWaitStrategy(OmniWaitStrategy.YIELD);
+        cfg.setEnableBindingCore(false);
+        cfg.setCpu(Constance.CPU_TYPE.ANY);
+        cfg.setEnableDisruptorBindingCore(false);
+        cfg.setDisruptorCpu(Constance.CPU_TYPE.NONE);
+        cfg.setEnableQueueBindingCore(false);
+        cfg.setQueueCpu(Constance.CPU_TYPE.NONE);
+        cfg.setEnableHandleConfirmBindingCore(false);
+        cfg.setHandleConfirmCpu(Constance.CPU_TYPE.NONE);
+
+        return cfg;
     }
 
 

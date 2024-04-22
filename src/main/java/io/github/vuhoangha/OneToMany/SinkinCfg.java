@@ -1,6 +1,8 @@
 package io.github.vuhoangha.OneToMany;
 
+import com.lmax.disruptor.BlockingWaitStrategy;
 import com.lmax.disruptor.WaitStrategy;
+import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.OmniWaitStrategy;
 import net.openhft.chronicle.queue.rollcycles.LargeRollCycles;
 
@@ -103,11 +105,35 @@ public class SinkinCfg {
     private OmniWaitStrategy queueWaitStrategy;
 
 
-    public SinkinCfg() {
+    private SinkinCfg() {
     }
 
     public static SinkinCfg builder() {
-        return new SinkinCfg();
+        SinkinCfg config = new SinkinCfg();
+
+        config.setRealtimePort(5555);
+        config.setConfirmPort(5556);
+        config.setMaxTimeWaitMS(1000);
+        config.setMaxObjectsPoolWait(30000);
+        config.setZmqSubBufferSize(1000000);
+        config.setTimeRateGetLatestMsgMS(3000);
+        config.setTimeRateGetMissMsgMS(3000);
+        config.setTimeoutSendReqMissMsg(5000);
+        config.setTimeoutRecvReqMissMsg(5000);
+        config.setWaitStrategy(new BlockingWaitStrategy());
+        config.setRingBufferSize(2 << 16);     // 131072
+        config.setRollCycles(LargeRollCycles.LARGE_DAILY);
+        config.setQueueWaitStrategy(OmniWaitStrategy.YIELD);
+        config.setEnableBindingCore(false);
+        config.setCpu(Constance.CPU_TYPE.ANY);
+        config.setEnableDisruptorProcessMsgBindingCore(false);
+        config.setDisruptorProcessMsgCpu(Constance.CPU_TYPE.NONE);
+        config.setEnableCheckMissMsgAndSubQueueBindingCore(false);
+        config.setCheckMissMsgAndSubQueueCpu(Constance.CPU_TYPE.NONE);
+        config.setEnableSubMsgBindingCore(false);
+        config.setSubMsgCpu(Constance.CPU_TYPE.NONE);
+
+        return config;
     }
 
     public OmniWaitStrategy getQueueWaitStrategy() {

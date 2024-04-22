@@ -4,6 +4,7 @@ import net.openhft.chronicle.bytes.Bytes;
 import net.openhft.chronicle.core.io.ReferenceOwner;
 
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 /**
  * Sử dụng để truyền dữ liệu xử lý msg giữa các tiến trình trong Sink
@@ -45,4 +46,11 @@ public class SinkProcessMsg {
         data.release(refId);
     }
 
+    @Override
+    public String toString(){
+        return "SinkProcessMsg{" +
+                "type=" + type +
+                ", data='" + Arrays.toString(data.toByteArray()) + '\'' +
+                '}';
+    }
 }

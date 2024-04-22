@@ -1,5 +1,7 @@
 package io.github.vuhoangha.OneToMany;
 
+import java.util.Arrays;
+
 /**
  * Dùng để xác định 1 yêu cầu lấy miss msg hoặc lấy msg mới nhất
  */
@@ -38,5 +40,14 @@ public class CheckMissMsg {
 
     public void setIndexTo(long indexTo) {
         this.indexTo = indexTo;
+    }
+
+    @Override
+    public String toString() {
+        return "CheckMissMsg{" +
+                "type=" + type +
+                ", indexFrom='" + indexFrom + '\'' +
+                ", indexTo='" + indexTo + '\'' +
+                '}';
     }
 }
