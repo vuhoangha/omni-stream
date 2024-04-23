@@ -27,37 +27,30 @@ public class OneToManyExample {
             System.out.println("ID: " + id);
         };
 
-        try {
-            new Sinkin(
-                    SinkinCfg.builder()
-                            .setQueuePath(sinkPath)
-                            .setSourceIP("127.0.0.1"),
-                    PeopleTest.class,
-                    handler);
-        } catch (Exception ex) {
-        }
+        new Sinkin(
+                SinkinCfg.builder()
+                        .setQueuePath(sinkPath)
+                        .setSourceIP("127.0.0.1"),
+                PeopleTest.class,
+                handler);
     }
 
 
     public static void runSource() {
-        try {
-            Fanout<PeopleTest> fanout = new Fanout<>(
-                    FanoutCfg.builder().setQueuePath(sourcePath),
-                    PeopleTest.class);
+        Fanout<PeopleTest> fanout = new Fanout<>(
+                FanoutCfg.builder().setQueuePath(sourcePath),
+                PeopleTest.class);
 
-            PeopleTest people = new PeopleTest();
-            int count = 0;
-            while (true) {
-                count++;
-                people.setIndex(count);
-                people.setName("people " + count);
-                System.out.println("\n\uD83D\uDE80Send: " + people);
-                fanout.write(people);
+        PeopleTest people = new PeopleTest();
+        int count = 0;
+        while (true) {
+            count++;
+            people.setIndex(count);
+            people.setName("people " + count);
+            System.out.println("\n\uD83D\uDE80Send: " + people);
+            fanout.write(people);
 
-                LockSupport.parkNanos(2_000_000_000L);
-            }
-        } catch (Exception ex) {
-
+            LockSupport.parkNanos(2_000_000_000L);
         }
     }
 
