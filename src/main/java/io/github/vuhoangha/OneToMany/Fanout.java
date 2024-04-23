@@ -359,6 +359,7 @@ public class Fanout<T extends SelfDescribingMarshallable> {
         LOGGER.info("Fanout closing...");
 
         _status = STOPPED;
+        LockSupport.parkNanos(1_000_000_000);
 
         // stop --> chờ để xử lý nốt msg
         _disruptor.shutdown();

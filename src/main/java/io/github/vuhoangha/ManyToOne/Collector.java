@@ -211,9 +211,11 @@ public class Collector<T extends SelfDescribingMarshallable> {
 
 
     private void _onShutdown() {
+        LOGGER.info("Collector preparing shutdown");
+
         _status = STOPPED;
 
-        LockSupport.parkNanos(500_000_000);
+        LockSupport.parkNanos(2_000_000_000);
 
         _queue.close();
 
@@ -222,7 +224,9 @@ public class Collector<T extends SelfDescribingMarshallable> {
             affinityCompose.release();
         }
 
-        LockSupport.parkNanos(500_000_000);
+        LockSupport.parkNanos(100_000_000);
+
+        LOGGER.info("Collector SHUTDOWN !");
     }
 
 }

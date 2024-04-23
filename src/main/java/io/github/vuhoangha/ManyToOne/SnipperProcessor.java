@@ -130,6 +130,7 @@ public class SnipperProcessor implements Runnable {
                             _map_item_with_time.remove(firstEntry.getKey());
                             CompletableFuture<Boolean> cb = _map_item_with_callback.remove(firstEntry.getKey());
                             cb.complete(false);
+                            LOGGER.warn("Snipper send msg timeout");
                         } else {
                             // dừng tìm kiếm vì key sắp xếp tăng dần và key-value tăng tỉ lệ thuận
                             break;

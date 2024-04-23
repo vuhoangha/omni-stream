@@ -46,7 +46,7 @@ public class SnipperCfg {
         SnipperCfg cfg = new SnipperCfg();
 
         cfg.setPort(5557);
-        cfg.setTimeout(10000);
+        cfg.setTimeout(30000);
         cfg.setWaitStrategy(new BlockingWaitStrategy());
         cfg.setRingBufferSize(2 << 16);     // 131072
         cfg.setDisruptorWaitStrategy(OmniWaitStrategy.YIELD);

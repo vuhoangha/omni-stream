@@ -669,6 +669,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         LOGGER.info("Sinkin closing...");
 
         _status = STOP;
+        LockSupport.parkNanos(500_000_000);
 
         // close zeromq, ngừng nhận msg mới
         _zmq_context.destroy();
@@ -697,6 +698,8 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         for (AffinityCompose affinityCompose : _affinity_composes) {
             affinityCompose.release();
         }
+
+        LockSupport.parkNanos(500_000_000);
 
         LOGGER.info("Sinkin CLOSED !");
     }
