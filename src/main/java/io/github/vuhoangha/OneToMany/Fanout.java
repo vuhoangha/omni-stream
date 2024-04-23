@@ -29,13 +29,14 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 
 public class Fanout<T extends SelfDescribingMarshallable> {
 
     // quản lý trạng thái
-    private static final int IDLE = 0, RUNNING = 1, STOPPED = 2;
-    private int _status = IDLE;
+    private final int IDLE = 0, RUNNING = 1, STOPPED = 2;
+    private final AtomicInteger _status = new AtomicInteger(IDLE);
 
     // tổng số item trong queue
     private long _seq_in_queue;
@@ -61,7 +62,7 @@ public class Fanout<T extends SelfDescribingMarshallable> {
 
         _cfg = cfg;
         _data_type = dataType;
-        _status = RUNNING;
+        _status.set(RUNNING);
         _zmq_context = new ZContext();
 
         _affinity_composes.add(Utils.runWithThreadAffinity(
@@ -174,7 +175,7 @@ public class Fanout<T extends SelfDescribingMarshallable> {
         ExcerptTailer tailer = _queue.createTailer();
 
         try {
-            while (_status == RUNNING) {
+            while (_status.get() == RUNNING) {
                 request = repSocket.recv(0);
                 byteInput.write(request);
                 type = byteInput.readByte();
@@ -260,7 +261,7 @@ public class Fanout<T extends SelfDescribingMarshallable> {
 
     public boolean write(T event) {
         try {
-            if (_status != RUNNING) return false;
+            if (_status.get() != RUNNING) return false;
             _ring_buffer.publishEvent((newEvent, sequence, srcEvent) -> srcEvent.copyTo(newEvent), event);
             return true;
         } catch (Exception ex) {
@@ -327,7 +328,7 @@ public class Fanout<T extends SelfDescribingMarshallable> {
             // di chuyển tới bản ghi cuối cùng và lắng nghe các msg kế tiếp
             tailer.toEnd();
 
-            while (_status == RUNNING) {
+            while (_status.get() == RUNNING) {
                 if (tailer.readBytes(byteQueueItem)) {
                     // ["topic"]["version"]["độ dài data"]["data"]["seq in queue"]["source native index"]
                     byteZmqPub.writeByte(Constance.FANOUT.PUB_TOPIC.MSG);
@@ -358,7 +359,7 @@ public class Fanout<T extends SelfDescribingMarshallable> {
     public void shutdown() {
         LOGGER.info("Fanout closing...");
 
-        _status = STOPPED;
+        _status.set(STOPPED);
         LockSupport.parkNanos(1_000_000_000);
 
         // stop --> chờ để xử lý nốt msg

@@ -8,6 +8,8 @@ public class SnipperInterMsg<T extends SelfDescribingMarshallable> {
 
     private T data;
 
+    private long expiry;
+
     public SnipperInterMsg() {
     }
 
@@ -27,11 +29,20 @@ public class SnipperInterMsg<T extends SelfDescribingMarshallable> {
         this.data = data;
     }
 
+    public long getExpiry() {
+        return expiry;
+    }
+
+    public void setExpiry(long expiry) {
+        this.expiry = expiry;
+    }
+
     @Override
     public String toString() {
         return "SnipperInterMsg{" +
                 "id=" + id +
                 ", data='" + data.toString() + '\'' +
+                ", expiry='" + expiry + '\'' +
                 '}';
     }
 }

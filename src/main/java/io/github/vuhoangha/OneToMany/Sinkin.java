@@ -27,12 +27,13 @@ import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 
 public class Sinkin<T extends SelfDescribingMarshallable> {
 
-    private static final int IDLE = 0, SYNCING = 1, RUNNING = 2, STOP = 3;
-    private int _status = IDLE;
+    private final int IDLE = 0, SYNCING = 1, RUNNING = 2, STOP = 3;
+    private final AtomicInteger _status = new AtomicInteger(IDLE);
 
     private static final Logger LOGGER = LoggerFactory.getLogger(Sinkin.class);
     private final ReferenceOwner _ref_id = ReferenceOwner.temporary("Sinkin");
@@ -78,9 +79,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         _seq_in_queue = _queue.entryCount();   // tổng số item trong queue
         _src_latest_index = _getLatestIndex();
 
-        // tạm dừng 100ms để _status được thấy bởi tất cả các Thread
-        _status = SYNCING;
-        LockSupport.parkNanos(100_000_000);
+        _status.set(SYNCING);
 
         // chạy đồng bộ dữ liệu với source trước
         new Thread(this::_sync).start();
@@ -105,7 +104,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         TranspotMsg transpotMsg = new TranspotMsg();
 
         try {
-            while (_status == SYNCING) {
+            while (_status.get() == SYNCING) {
                 // tổng hợp data rồi req sang src
                 _byte_miss_msg.writeByte(Constance.FANOUT.CONFIRM.FROM_LATEST);
                 _byte_miss_msg.writeLong(_src_latest_index);
@@ -152,9 +151,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
                 byteRes.clear();
             }
 
-            // tạm dừng 100ms để _status được thấy bởi tất cả các Thread
-            _status = RUNNING;
-            LockSupport.parkNanos(100_000_000);
+            _status.set(RUNNING);
 
             // khởi tạo luồng chính
             _affinity_composes.add(
@@ -339,7 +336,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
 
         try {
             // Nhận và xử lý tin nhắn
-            while (_status == RUNNING) {
+            while (_status.get() == RUNNING) {
                 byte[] msg = subscriber.recv(0);
                 bytes.clear();
                 bytes.write(msg);
@@ -603,7 +600,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         Runnable waiter = OmniWaitStrategy.getWaiter(_cfg.getQueueWaitStrategy());
 
         try {
-            while (_status == RUNNING) {
+            while (_status.get() == RUNNING) {
                 if (tailer.readBytes(byte_read)) {
                     version = byte_read.readByte();   // version
                     byte_read.read(byte_msg_data, byte_read.readInt()); // data
@@ -668,7 +665,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
     private void _onShutdown() {
         LOGGER.info("Sinkin closing...");
 
-        _status = STOP;
+        _status.set(STOP);
         LockSupport.parkNanos(500_000_000);
 
         // close zeromq, ngừng nhận msg mới

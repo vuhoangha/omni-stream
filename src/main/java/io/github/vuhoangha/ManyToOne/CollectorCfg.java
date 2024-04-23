@@ -66,6 +66,9 @@ public class CollectorCfg {
      */
     private Integer cpu;
 
+    // port để lắng nghe các yêu cầu lấy time
+    private Integer timePort;
+
 
     private CollectorCfg() {
     }
@@ -75,6 +78,7 @@ public class CollectorCfg {
 
         // set default value
         cfg.setPort(5557);
+        cfg.setTimePort(5558);
         cfg.setStartId(-2L);
         cfg.setRollCycles(LargeRollCycles.LARGE_DAILY);
         cfg.setQueueWaitStrategy(OmniWaitStrategy.YIELD);
@@ -88,6 +92,19 @@ public class CollectorCfg {
         return cfg;
     }
 
+
+    public String getTimeUrl() {
+        return MessageFormat.format("tcp://*:{0}", timePort + "");
+    }
+
+    public Integer getTimePort() {
+        return timePort;
+    }
+
+    public CollectorCfg setTimePort(Integer timePort) {
+        this.timePort = timePort;
+        return this;
+    }
 
     public Integer getCpu() {
         return cpu;

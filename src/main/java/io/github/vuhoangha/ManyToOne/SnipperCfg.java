@@ -13,14 +13,21 @@ public class SnipperCfg {
     // IP của Collector
     private String collectorIP;
 
-    // timeout gửi nhận message
-    private Integer timeout;
+    // timeout gửi nhận message dành cho user
+    private Long timeout;
+
+    // thời gian message còn hiệu lực khi Collector nhận được
+    // 'ttl' nên nhỏ hơn 'timeout' để chắc chắn rằng message này không thể được xử lý bởi Collector
+    private Long ttl;
 
     // kiểu WaitStrategy được sử dụng để gom message từ nhiều thread để dùng ZeroMQ gửi qua Collector
     private WaitStrategy waitStrategy;
 
     // port mà Collector lắng nghe
     private Integer port;
+
+    // port mà Collector gửi lại Time Server
+    private Integer timePort;
 
     // kích cỡ ring buffer của disruptor gửi/nhận message. Phải là dạng 2^n
     private Integer ringBufferSize;
@@ -38,6 +45,9 @@ public class SnipperCfg {
      */
     private Integer disruptorCpu;
 
+    // bao lâu đồng bộ time server 1 lần
+    private Long syncTimeServerInterval;
+
 
     private SnipperCfg() {
     }
@@ -46,16 +56,41 @@ public class SnipperCfg {
         SnipperCfg cfg = new SnipperCfg();
 
         cfg.setPort(5557);
-        cfg.setTimeout(30000);
+        cfg.setTimePort(5558);
+        cfg.setTimeout(30000L);
+        cfg.setTtl(15000L);
         cfg.setWaitStrategy(new BlockingWaitStrategy());
         cfg.setRingBufferSize(2 << 16);     // 131072
         cfg.setDisruptorWaitStrategy(OmniWaitStrategy.YIELD);
         cfg.setDisruptorCpu(Constance.CPU_TYPE.ANY);
         cfg.setEnableDisruptorBindingCore(false);
+        cfg.setSyncTimeServerInterval(5000L);
 
         return cfg;
     }
 
+
+    public Long getSyncTimeServerInterval() {
+        return syncTimeServerInterval;
+    }
+
+    public SnipperCfg setSyncTimeServerInterval(Long syncTimeServerInterval) {
+        this.syncTimeServerInterval = syncTimeServerInterval;
+        return this;
+    }
+
+    public Integer getTimePort() {
+        return timePort;
+    }
+
+    public SnipperCfg setTimePort(Integer timePort) {
+        this.timePort = timePort;
+        return this;
+    }
+
+    public String getTimeServerUrl() {
+        return MessageFormat.format("tcp://{0}:{1}", collectorIP, timePort + "");
+    }
 
     public Integer getDisruptorCpu() {
         return disruptorCpu;
@@ -124,12 +159,21 @@ public class SnipperCfg {
         return this;
     }
 
-    public Integer getTimeout() {
+    public Long getTimeout() {
         return timeout;
     }
 
-    public SnipperCfg setTimeout(Integer timeout) {
+    public SnipperCfg setTimeout(Long timeout) {
         this.timeout = timeout;
+        return this;
+    }
+
+    public Long getTtl() {
+        return ttl;
+    }
+
+    public SnipperCfg setTtl(Long ttl) {
+        this.ttl = ttl;
         return this;
     }
 

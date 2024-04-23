@@ -5,6 +5,7 @@ import io.github.vuhoangha.Common.OmniWaitStrategy;
 import io.github.vuhoangha.Common.Utils;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
+import net.openhft.chronicle.core.io.ReferenceOwner;
 import net.openhft.chronicle.queue.ExcerptAppender;
 import net.openhft.chronicle.queue.ExcerptTailer;
 import net.openhft.chronicle.queue.impl.single.SingleChronicleQueue;
@@ -22,14 +23,16 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.BiConsumer;
 
 public class Collector<T extends SelfDescribingMarshallable> {
 
-    private static final int IDLE = 0, RUNNING = 1, STOPPED = 2;
-    private int _status = IDLE;
+    private final int IDLE = 0, RUNNING = 1, STOPPED = 2;
+    private final AtomicInteger _status = new AtomicInteger(IDLE);
 
+    private final ReferenceOwner _ref_id = ReferenceOwner.temporary("Collector");
     private static final Logger LOGGER = LoggerFactory.getLogger(Collector.class);
     private final CollectorCfg _cfg;
     private final Class<T> _dataType;
@@ -48,7 +51,7 @@ public class Collector<T extends SelfDescribingMarshallable> {
         _cfg = cfg;
         _dataType = dataType;
         _handler = handler;
-        _status = RUNNING;
+        _status.set(RUNNING);
 
         _queue = SingleChronicleQueueBuilder
                 .binary(_cfg.getQueuePath())
@@ -97,6 +100,9 @@ public class Collector<T extends SelfDescribingMarshallable> {
                         _cfg.getEnableZRouterBindingCore(),
                         _cfg.getZRouterCpu(),
                         () -> new Thread(this::_subMsg).start()));
+
+        // start time server
+        new Thread(this::_initTimeServer).start();
     }
 
 
@@ -115,24 +121,32 @@ public class Collector<T extends SelfDescribingMarshallable> {
 
             byte[] clientAddress;
             byte[] request;
-            Bytes<ByteBuffer> bytesTotal = Bytes.elasticByteBuffer();
+            Bytes<ByteBuffer> bytesTotal = Bytes.elasticByteBuffer();   // cấu trúc ["time_to_live"]["req_id"]["data"]
             Bytes<ByteBuffer> bytesData = Bytes.elasticByteBuffer();
             long reqId;
+            long expiry;
 
             try {
-                while (_status == RUNNING) {
+                while (_status.get() == RUNNING) {
                     clientAddress = socket.recv(0);
                     request = socket.recv(0);
                     bytesTotal.write(request);
 
-                    // lưu vào queue
-                    reqId = bytesTotal.readLong();
-                    bytesTotal.read(bytesData);
-                    appender.writeBytes(bytesData);
+                    expiry = bytesTotal.readLong();
+                    if (expiry >= System.currentTimeMillis()) {
+                        // msg còn hạn sử dụng
 
-                    // gửi cho Snipper confirm nhận được
-                    socket.send(clientAddress, ZMQ.SNDMORE);
-                    socket.send(Utils.longToBytes(reqId), 0);
+                        // lưu vào queue
+                        reqId = bytesTotal.readLong();
+                        bytesTotal.read(bytesData);
+                        appender.writeBytes(bytesData);
+
+                        // gửi cho Snipper confirm nhận được
+                        socket.send(clientAddress, ZMQ.SNDMORE);
+                        socket.send(Utils.longToBytes(reqId), 0);
+                    } else {
+                        LOGGER.warn("The message has expired {}", expiry);
+                    }
 
                     // clear
                     bytesTotal.clear();
@@ -143,10 +157,54 @@ public class Collector<T extends SelfDescribingMarshallable> {
             }
 
             // close & release
-            bytesTotal.releaseLast();
-            bytesData.releaseLast();
+            bytesTotal.release(_ref_id);
+            bytesData.release(_ref_id);
             socket.close();
             appender.close();
+        }
+    }
+
+
+    private void _initTimeServer() {
+        LOGGER.info("Collector run Time Server on logical processor {}", Affinity.getCpu());
+
+        try (ZContext context = new ZContext()) {
+            ZMQ.Socket socket = context.createSocket(SocketType.ROUTER);
+            socket.setHeartbeatIvl(10000);
+            socket.setHeartbeatTtl(15000);
+            socket.setHeartbeatTimeout(15000);
+            socket.bind(_cfg.getTimeUrl());
+
+            byte[] clientAddress;
+            byte[] request;
+            Bytes<ByteBuffer> bytesRequest = Bytes.elasticByteBuffer();     // cấu trúc ["client_time"]
+            Bytes<ByteBuffer> bytesResponse = Bytes.elasticByteBuffer();
+            long clientTime;
+
+            try {
+                while (_status.get() == RUNNING) {
+                    clientAddress = socket.recv(0);
+                    request = socket.recv(0);
+                    bytesRequest.write(request);
+                    clientTime = bytesRequest.readLong();
+
+                    // gửi cho Snipper confirm nhận được ["client_time"]["system_time"]
+                    bytesResponse.writeLong(clientTime);
+                    bytesResponse.writeLong(System.currentTimeMillis());
+                    socket.send(clientAddress, ZMQ.SNDMORE);
+                    socket.send(bytesResponse.toByteArray(), 0);
+
+                    bytesRequest.clear();
+                    bytesResponse.clear();
+                }
+            } catch (Exception ex) {
+                LOGGER.error("Collector Time Server error", ex);
+            }
+
+            // close & release
+            bytesRequest.release(_ref_id);
+            bytesResponse.release(_ref_id);
+            socket.close();
         }
     }
 
@@ -177,7 +235,7 @@ public class Collector<T extends SelfDescribingMarshallable> {
         }
 
         try {
-            while (_status == RUNNING) {
+            while (_status.get() == RUNNING) {
                 if (tailer.readBytes(bytes)) {
                     // deserialize binary sang T
                     objT.readMarshallable(wire);
@@ -194,7 +252,7 @@ public class Collector<T extends SelfDescribingMarshallable> {
             LOGGER.error("Collector SubQueue error", ex);
         }
 
-        bytes.releaseLast();
+        bytes.release(_ref_id);
         tailer.close();
     }
 
@@ -213,9 +271,9 @@ public class Collector<T extends SelfDescribingMarshallable> {
     private void _onShutdown() {
         LOGGER.info("Collector preparing shutdown");
 
-        _status = STOPPED;
+        _status.set(STOPPED);
 
-        LockSupport.parkNanos(2_000_000_000);
+        LockSupport.parkNanos(1_500_000_000);
 
         _queue.close();
 
@@ -224,7 +282,7 @@ public class Collector<T extends SelfDescribingMarshallable> {
             affinityCompose.release();
         }
 
-        LockSupport.parkNanos(100_000_000);
+        LockSupport.parkNanos(500_000_000);
 
         LOGGER.info("Collector SHUTDOWN !");
     }

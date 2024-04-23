@@ -74,9 +74,9 @@ public class SnipperProcessor implements Runnable {
         // khởi tạo socket
         ZMQ.Socket socket = _zContext.createSocket(SocketType.DEALER);
         socket.setRcvHWM(1000000);
-        socket.setHeartbeatIvl(10000);
-        socket.setHeartbeatTtl(15000);
-        socket.setHeartbeatTimeout(15000);
+        socket.setHeartbeatIvl(30000);
+        socket.setHeartbeatTtl(45000);
+        socket.setHeartbeatTimeout(45000);
         socket.setReconnectIVL(10000);
         socket.setReconnectIVLMax(10000);
         socket.connect(_socket_url);
@@ -86,7 +86,7 @@ public class SnipperProcessor implements Runnable {
         byte[] reply;
         SnipperInterMsg newEvent;
         long nextTimeCheckTimeout = System.currentTimeMillis() + _time_out_interval_ms;     // lần check timeout tiếp theo
-        long id;
+        long reqID;
 
         Runnable waiter = OmniWaitStrategy.getWaiter(_wait_strategy);
 
@@ -110,9 +110,9 @@ public class SnipperProcessor implements Runnable {
                     reply = socket.recv(ZMQ.NOBLOCK);
                     if (reply != null) {
                         // xóa khỏi cache --> callback về
-                        id = Utils.bytesToLong(reply);
-                        _map_item_with_time.remove(id);
-                        CompletableFuture<Boolean> cb = _map_item_with_callback.remove(id);
+                        reqID = Utils.bytesToLong(reply);
+                        _map_item_with_time.remove(reqID);
+                        CompletableFuture<Boolean> cb = _map_item_with_callback.remove(reqID);
                         if (cb != null)
                             cb.complete(true);
                     } else {
@@ -150,9 +150,10 @@ public class SnipperProcessor implements Runnable {
     }
 
 
-    // dữ liệu gửi đi ["id"]["data"]
+    // dữ liệu gửi đi ["time_to_live"]["req_id"]["data"]
     private void _send(ZMQ.Socket socket, SnipperInterMsg msg) {
         try {
+            _bytes_req.writeLong(msg.getExpiry());
             _bytes_req.writeLong(msg.getId());
             msg.getData().writeMarshallable(_wire_req);
 
