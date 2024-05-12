@@ -2,6 +2,9 @@ package io.github.vuhoangha.Common;
 
 import java.util.ArrayDeque;
 
+/**
+ * ObjectPool sử dụng trong môi trường đơn luồng
+ */
 public class ObjectPool<T> {
 
     private final ArrayDeque<T> deque = new ArrayDeque<>();

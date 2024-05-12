@@ -95,9 +95,9 @@ public class TranspotMsg {
         allData.clear();
     }
 
-    public void destroy(ReferenceOwner id) {
-        data.release(id);
-        allData.release(id);
+    public void destroy() {
+        data.releaseLast();
+        allData.releaseLast();
     }
 
     @Override

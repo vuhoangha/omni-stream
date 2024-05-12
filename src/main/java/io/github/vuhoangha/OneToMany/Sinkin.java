@@ -169,7 +169,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
             // giải phóng tài nguyên
             localAppender.close();
             byteRes.release(_ref_id);
-            transpotMsg.destroy(_ref_id);
+            transpotMsg.destroy();
             socket.close();
 
             LOGGER.info("Sinkin synced done !");
@@ -401,11 +401,14 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
 
             // check xem trong hàng đợi có msg kế tiếp không ?
             if (event.getType() == Constance.SINKIN.PROCESSS_MSG_TYPE.MSG || event.getType() == Constance.SINKIN.PROCESSS_MSG_TYPE.MULTI_MSG) {
-                while (!_msg_wait.isEmpty() && _msg_wait.firstKey() == _seq_in_queue + 1) {
-                    TranspotMsg tMsg = _msg_wait.remove(_msg_wait.firstKey());      // lấy msg chờ và xóa khỏi hàng chờ
-                    _seq_in_queue++;
-                    _src_latest_index = tMsg.getSrcIndex();
-                    _appender.writeBytes(tMsg.toBytes());                           // ghi vào queue
+                while (!_msg_wait.isEmpty() && _msg_wait.firstKey() <= _seq_in_queue + 1) {
+                    long firstKey = _msg_wait.firstKey();
+                    TranspotMsg tMsg = _msg_wait.remove(firstKey);      // lấy msg chờ và xóa khỏi hàng chờ
+                    if (firstKey == _seq_in_queue + 1) {
+                        _seq_in_queue++;
+                        _src_latest_index = tMsg.getSrcIndex();
+                        _appender.writeBytes(tMsg.toBytes());                           // ghi vào queue
+                    }
                     _returnTranspotMsg(tMsg);                                       // trả lại về object pool
                 }
             }
