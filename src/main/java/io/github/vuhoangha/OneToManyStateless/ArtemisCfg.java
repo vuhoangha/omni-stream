@@ -102,7 +102,7 @@ public class ArtemisCfg {
 
     // thời gian để starting là bao lâu. Đây là lúc ban đầu service sẽ ngưng xử lý các msg nhận được mà chỉ tích trữ nó lại
     // sau đó nó sẽ chọn ra msg có seq thấp nhất để làm điểm khởi đầu
-    private Integer startingTimeMs;
+    private Long startingTimeMs;
 
 
     public ArtemisCfg() {
@@ -113,7 +113,7 @@ public class ArtemisCfg {
 
         config.setRealtimePorts(Arrays.asList(5570));
         config.setConfirmPort(5571);
-        config.setMaxTimeWaitMS(2000);
+        config.setMaxTimeWaitMS(1500);
         config.setMaxObjectsPoolWait(30000);
         config.setZmqSubBufferSize(1000000);
         config.setTimeRateGetLatestMsgMS(1000);
@@ -132,7 +132,7 @@ public class ArtemisCfg {
         config.setSubMsgCpu(Constance.CPU_TYPE.NONE);
         config.setBatchSizeFromTo(10000);
         config.setTimeoutMustResyncMs(70000);
-        config.setStartingTimeMs(5000);
+        config.setStartingTimeMs(5000L);
 
         return config;
     }

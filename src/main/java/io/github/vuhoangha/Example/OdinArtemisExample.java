@@ -8,9 +8,9 @@ import java.util.function.Consumer;
 public class OdinArtemisExample {
 
     public static void run() {
-        new Thread(OdinArtemisExample::runOdin).start();
-        LockSupport.parkNanos(2_000_000_000L);
         new Thread(OdinArtemisExample::runArtemis).start();
+        LockSupport.parkNanos(2_000_000_000L);
+        new Thread(OdinArtemisExample::runOdin).start();
     }
 
     public static void runOdin() {
@@ -39,12 +39,16 @@ public class OdinArtemisExample {
         Consumer<String> onInterrupt = (String reason) -> {
             System.out.println("\uD83D\uDCE9Interrupt: " + reason);
         };
+        Consumer<String> onWarning = (String reason) -> {
+            System.out.println("\uD83D\uDCE9Warning: " + reason);
+        };
 
         new Artemis<>(
                 ArtemisCfg.getDefault().setSourceIP("127.0.0.1"),
                 PeopleTest.class,
                 onData,
-                onInterrupt
+                onInterrupt,
+                onWarning
         );
     }
 

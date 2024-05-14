@@ -36,6 +36,7 @@ public class Artemis<T extends SelfDescribingMarshallable> {
     private final ObjectPool<ArtemisCacheMsg> _object_pool;     // môi trường đơn luồng
     private final ArtemisHandler _onData;
     private final Consumer<String> _onInterrupt;
+    private final Consumer<String> _onWarning;
     private final ArtemisCfg _cfg;
     private long _seq;              // sequence của msg từ ODIN
     private long _version;          // version của msg từ ODIN
@@ -54,7 +55,7 @@ public class Artemis<T extends SelfDescribingMarshallable> {
     private final Wire _wire_process_msg = WireType.BINARY.apply(_byte_process_msg);
 
 
-    public Artemis(ArtemisCfg cfg, Class<T> dataType, ArtemisHandler onData, Consumer<String> onInterrupt) {
+    public Artemis(ArtemisCfg cfg, Class<T> dataType, ArtemisHandler onData, Consumer<String> onInterrupt, Consumer<String> onWarning) {
         // validate
         Utils.checkNull(cfg.getSourceIP(), "Require source IP");
         Utils.checkNull(dataType, "Require dataType");
@@ -65,6 +66,7 @@ public class Artemis<T extends SelfDescribingMarshallable> {
         _onData = onData;
         _dataType = dataType;
         _onInterrupt = onInterrupt;
+        _onWarning = onWarning;
         _object_pool = new ObjectPool<>(cfg.getMaxObjectsPoolWait(), ArtemisCacheMsg.class);
         _zmq_context = new ZContext();
 
@@ -83,7 +85,7 @@ public class Artemis<T extends SelfDescribingMarshallable> {
 
         // sau bao lâu thì bắt đầu chọn seq và chạy chính thức
         new Thread(() -> {
-            LockSupport.parkNanos(_cfg.getStartingTimeMs() * 1000000);
+            LockSupport.parkNanos(_cfg.getStartingTimeMs() * 1000000L);
             _ring_buffer_process_msg.publishEvent(
                     (newEvent, sequence, __type, __bytesParam) -> {
                         newEvent.setType(__type);
@@ -202,9 +204,11 @@ public class Artemis<T extends SelfDescribingMarshallable> {
      * nếu lâu quá chưa được xử lý thì sẽ có "checkLongTimeMsg" định kỳ check để lấy ra xử lý
      */
     private void _checkLatestMsg() {
-        _ring_buffer_miss_msg.publishEvent(
-                (newEvent, sequence, __type) -> newEvent.setType(__type),
-                Constance.ODIN.CONFIRM.LATEST_MSG);
+        if (_status.get() != STOP) {
+            _ring_buffer_miss_msg.publishEvent(
+                    (newEvent, sequence, __type) -> newEvent.setType(__type),
+                    Constance.ODIN.CONFIRM.LATEST_MSG);
+        }
     }
 
 
@@ -212,10 +216,11 @@ public class Artemis<T extends SelfDescribingMarshallable> {
      * đẩy vào trong luồng xử lý msg chính để lấy ra các msg đã vào nhưng lâu được xử lý
      */
     private void _checkLongTimeMsg() {
-        if (_status.get() == RUNNING)
+        if (_status.get() == RUNNING) {
             _ring_buffer_process_msg.publishEvent(
                     (newEvent, sequence, __type) -> newEvent.setType(__type),
                     Constance.ARTEMIS.PROCESSS_MSG_TYPE.CHECK_MISS);
+        }
     }
 
 
@@ -239,10 +244,10 @@ public class Artemis<T extends SelfDescribingMarshallable> {
         subscriber.setReconnectIVL(10000);
         subscriber.setReconnectIVLMax(10000);
 
+        log.info("Realtime url {}", _cfg.getRealTimeUrl());
+
         subscriber.connect(_cfg.getRealTimeUrl());
         subscriber.subscribe(ZMQ.SUBSCRIPTION_ALL);     // nhận tất cả tin nhắn từ publisher
-
-        log.info("Artemis start subscribe");
 
         try {
             // Nhận và xử lý tin nhắn
@@ -289,10 +294,14 @@ public class Artemis<T extends SelfDescribingMarshallable> {
                 _checkWaitMsgCanProcess();
             } else if (event.getType() == Constance.ARTEMIS.PROCESSS_MSG_TYPE.CHECK_MISS) {
                 // nếu hàng chờ còn msg và nó đã chờ quá lâu --> lấy các msg miss ở giữa
+                // nếu đã chờ rất rất lâu thì interrupt --> báo cho tầng ứng dụng biết
                 // nếu ko có msg chờ thì bỏ qua
                 if (!_msg_wait.isEmpty() && _status.get() == RUNNING) {
                     ArtemisCacheMsg msg = _msg_wait.firstEntry().getValue();
-                    if (msg.getRcvTime() + _cfg.getMaxTimeWaitMS() < System.currentTimeMillis()) {
+                    if (msg.getRcvTime() + _cfg.getTimeoutMustResyncMs() < System.currentTimeMillis()) {
+                        _status.set(STOP);
+                        _onInterrupt.accept("Msg wait so long");
+                    } else if (msg.getRcvTime() + _cfg.getMaxTimeWaitMS() < System.currentTimeMillis()) {
                         long from = _seq + 1;
                         long to = msg.getSequence() - 1;
                         long currentIndex = from;
@@ -420,11 +429,13 @@ public class Artemis<T extends SelfDescribingMarshallable> {
                     // ko gửi được msg
 
                     log.error("Get latest msg fail. Maybe TIMEOUT !");
+                    if (_onWarning != null) _onWarning.accept("Req msg maybe TIMEOUT !");
                 } else {
                     // nhận về
                     _byte_miss_msg_raw = _zSocket.recv();
                     if (_byte_miss_msg_raw == null) {
                         log.error("Rep latest msg empty. Maybe TIMEOUT !");
+                        if (_onWarning != null) _onWarning.accept("Req msg maybe TIMEOUT !");
                         isSuccess = false;
                     } else if (_byte_miss_msg_raw.length > 0) {
                         _ring_buffer_process_msg.publishEvent(
@@ -451,11 +462,13 @@ public class Artemis<T extends SelfDescribingMarshallable> {
                     // ko gửi được msg
 
                     log.error(MessageFormat.format("Get items from {0} - to {1} fail. Maybe TIMEOUT !", msg.getSeqFrom(), msg.getSeqTo()));
+                    if (_onWarning != null) _onWarning.accept("Req msg maybe TIMEOUT !");
                 } else {
                     // nhận về
                     _byte_miss_msg_raw = _zSocket.recv();
                     if (_byte_miss_msg_raw == null) {
                         log.error(MessageFormat.format("Rep items from {0} - to {1} fail. Maybe TIMEOUT !", msg.getSeqFrom(), msg.getSeqTo()));
+                        if (_onWarning != null) _onWarning.accept("Req msg maybe TIMEOUT !");
                         isSuccess = false;
                     } else if (_byte_miss_msg_raw.length > 0) {
                         _ring_buffer_process_msg.publishEvent(
