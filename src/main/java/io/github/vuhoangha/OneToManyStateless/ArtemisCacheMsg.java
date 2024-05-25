@@ -1,13 +1,13 @@
 package io.github.vuhoangha.OneToManyStateless;
 
 import lombok.Data;
-import net.openhft.chronicle.wire.SelfDescribingMarshallable;
+import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 
 /**
  * Msg dùng để cache trong Artemis
  */
 @Data
-public class ArtemisCacheMsg<T extends SelfDescribingMarshallable> {
+public class ArtemisCacheMsg<T extends WriteBytesMarshallable> {
 
     private long version;
 

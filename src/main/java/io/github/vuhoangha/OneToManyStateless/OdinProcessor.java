@@ -4,6 +4,7 @@ import com.lmax.disruptor.*;
 import io.github.vuhoangha.Common.Utils;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.Affinity;
+import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
@@ -11,14 +12,14 @@ import org.zeromq.ZMQ;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
-public class OdinProcessor implements EventProcessor {
+public class OdinProcessor<T extends WriteBytesMarshallable> implements EventProcessor {
 
     private static final int IDLE = 0;              // trạng thái nằm im
     private static final int HALTED = IDLE + 1;     // trạng thái đã dừng
     private static final int RUNNING = HALTED + 1;  // trạng thái đang chạy
     private final AtomicInteger running = new AtomicInteger(IDLE);      // quản lý trạng thái hiện tại của processor
 
-    private final RingBuffer<OdinDisruptorEvent> ringBuffer;
+    private final RingBuffer<OdinDisruptorEvent<T>> ringBuffer;
     private final Sequence sequence = new Sequence(Sequencer.INITIAL_CURSOR_VALUE);     // quản lý số thứ tự trong processor
 
     /*
@@ -33,7 +34,7 @@ public class OdinProcessor implements EventProcessor {
 
 
     public OdinProcessor(
-            RingBuffer<OdinDisruptorEvent> ringBuffer,
+            RingBuffer<OdinDisruptorEvent<T>> ringBuffer,
             SequenceBarrier sequenceBarrier,
             ZContext zContext,
             int port,

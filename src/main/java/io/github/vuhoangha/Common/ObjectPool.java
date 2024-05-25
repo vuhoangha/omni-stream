@@ -1,6 +1,7 @@
 package io.github.vuhoangha.Common;
 
 import java.util.ArrayDeque;
+import java.util.function.Supplier;
 
 /**
  * ObjectPool sử dụng trong môi trường đơn luồng
@@ -9,11 +10,11 @@ public class ObjectPool<T> {
 
     private final ArrayDeque<T> deque = new ArrayDeque<>();
     private final int maxSize;
-    private final Class<T> dataType;
+    private final Supplier<T> factory;
 
-    public ObjectPool(int maxSize, Class<T> dataType) {
+    public ObjectPool(int maxSize, Supplier<T> factory) {
         this.maxSize = maxSize;
-        this.dataType = dataType;
+        this.factory = factory;
     }
 
     public void push(T element) {
@@ -21,9 +22,9 @@ public class ObjectPool<T> {
             deque.push(element);
     }
 
-    public T pop() throws Exception {
+    public T pop() {
         if (deque.isEmpty())
-            return this.dataType.newInstance();
+            return factory.get();
         return deque.pop();
     }
 

@@ -68,7 +68,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         _cfg = cfg;
         _dataType = dataType;
         _handler = handler;
-        _object_pool = new ObjectPool<>(cfg.getMaxObjectsPoolWait(), TranspotMsg.class);
+        _object_pool = new ObjectPool<>(cfg.getMaxObjectsPoolWait(), TranspotMsg::new);
         _zmq_context = new ZContext();
 
         _queue = SingleChronicleQueueBuilder

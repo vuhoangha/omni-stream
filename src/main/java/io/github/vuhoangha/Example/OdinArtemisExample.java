@@ -14,26 +14,27 @@ public class OdinArtemisExample {
     }
 
     public static void runOdin() {
-        Odin odin = new Odin<>(
+        Odin<CarTest> odin = new Odin<>(
                 OdinCfg.getDefault(),
-                PeopleTest.class
+                CarTest.class,
+                CarTest::clone
         );
 
         int count = 0;
         while (true) {
             count++;
-            PeopleTest people = new PeopleTest(count, "people " + count);
-            System.out.println("\n\uD83D\uDE80Send: " + people);
-            odin.send(people);
+            CarTest car = new CarTest(count, count + 1000);
+            System.out.println("\n\uD83D\uDE80Send: " + car);
+            odin.send(car);
             LockSupport.parkNanos(100_000_000L);
         }
     }
 
     public static void runArtemis() {
-        ArtemisHandler<PeopleTest> onData = (long version, long seq, PeopleTest data) -> {
+        ArtemisHandler<CarTest> onData = (long version, long seq, CarTest data) -> {
             System.out.println("\uD83D\uDCE9Received");
             System.out.println("Version: " + version);
-            System.out.println("People: " + data.toString());
+            System.out.println("Car: " + data.toString());
             System.out.println("Seq: " + seq);
         };
         Consumer<String> onInterrupt = (String reason) -> {
@@ -45,7 +46,8 @@ public class OdinArtemisExample {
 
         new Artemis<>(
                 ArtemisCfg.getDefault().setSourceIP("127.0.0.1"),
-                PeopleTest.class,
+                CarTest.class,
+                CarTest::reader,
                 onData,
                 onInterrupt,
                 onWarning

@@ -18,7 +18,7 @@ To include OmniStream in your project, add the following dependency to your proj
 <dependency>
     <groupId>io.github.vuhoangha</groupId>
     <artifactId>omni-stream</artifactId>
-    <version>1.0.4</version>
+    <version>1.0.5</version>
 </dependency>
 ```
 
@@ -26,7 +26,7 @@ To include OmniStream in your project, add the following dependency to your proj
 
 ```groovy
 dependencies {
-    implementation 'io.github.vuhoangha:omni-stream:1.0.4'
+    implementation 'io.github.vuhoangha:omni-stream:1.0.5'
 }
 ```
 

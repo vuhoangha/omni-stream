@@ -9,9 +9,7 @@ import io.github.vuhoangha.Common.*;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
-import net.openhft.chronicle.wire.SelfDescribingMarshallable;
-import net.openhft.chronicle.wire.Wire;
-import net.openhft.chronicle.wire.WireType;
+import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
@@ -25,9 +23,10 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.BiConsumer;
 
 @Slf4j
-public class Odin<T extends SelfDescribingMarshallable> {
+public class Odin<T extends WriteBytesMarshallable> {
 
     // quản lý trạng thái
     private final int IDLE = 0, RUNNING = 1, STOPPED = 2;
@@ -39,22 +38,23 @@ public class Odin<T extends SelfDescribingMarshallable> {
 
     private final OdinCfg _cfg;
     Bytes<ByteBuffer> _byte_temp_disruptor = Bytes.elasticByteBuffer();
-    Wire _wire_temp_disruptor = WireType.BINARY.apply(_byte_temp_disruptor);
     Bytes<ByteBuffer> _byte_disruptor = Bytes.elasticByteBuffer();
-    private Disruptor<OdinDisruptorEvent> _disruptor;
-    private RingBuffer<OdinDisruptorEvent> _ring_buffer;
+    private Disruptor<OdinDisruptorEvent<T>> _disruptor;
+    private RingBuffer<OdinDisruptorEvent<T>> _ring_buffer;
     private final ZContext _zmq_context;
     List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
     private final ConcurrencyObjectPool<OdinCacheEvent> _object_pool;
     private final OdinCacheControl _odin_cache_control = new OdinCacheControl();
     ScheduledExecutorService _remove_expiry_cache_executor = Executors.newScheduledThreadPool(1);
     private final Class<T> _dataType;
+    private final BiConsumer<T, T> _cloner;     // clone giá trị 2 object
 
 
-    public Odin(OdinCfg cfg, Class<T> dataType) {
+    public Odin(OdinCfg cfg, Class<T> dataType, BiConsumer<T, T> cloner) {
         Utils.checkNull(dataType, "Require dataType");
 
         _cfg = cfg;
+        _cloner = cloner;
         _status.set(RUNNING);
         _dataType = dataType;
         _zmq_context = new ZContext();
@@ -106,12 +106,12 @@ public class Odin<T extends SelfDescribingMarshallable> {
 
 
     // chuyển dữ liệu sang binary và lưu vào cache
-    private void numberingAndSerialize(OdinDisruptorEvent event, long sequence, boolean endOfBatch) {
+    private void numberingAndSerialize(OdinDisruptorEvent<T> event, long sequence, boolean endOfBatch) {
         try {
             _seq++;
 
             // convert dữ liệu sang binary [version][seq][data_length][data]
-            event.getData().writeMarshallable(_wire_temp_disruptor);
+            event.getData().writeMarshallable(_byte_temp_disruptor);
             _byte_disruptor.writeLong(_version);
             _byte_disruptor.writeLong(_seq);
             _byte_disruptor.writeInt((int) _byte_temp_disruptor.writePosition());
@@ -129,7 +129,6 @@ public class Odin<T extends SelfDescribingMarshallable> {
         } finally {
             _byte_disruptor.clear();
             _byte_temp_disruptor.clear();
-            _wire_temp_disruptor.clear();
         }
     }
 
@@ -145,7 +144,7 @@ public class Odin<T extends SelfDescribingMarshallable> {
                 _cfg.getDisruptorWaitStrategy());
         _ring_buffer = _disruptor.getRingBuffer();
 
-        EventHandler<OdinDisruptorEvent> numberingAndSerializeHandler = this::numberingAndSerialize;
+        EventHandler<OdinDisruptorEvent<T>> numberingAndSerializeHandler = this::numberingAndSerialize;
 
         // serialize data
         _disruptor.handleEventsWith(numberingAndSerializeHandler);
@@ -153,7 +152,7 @@ public class Odin<T extends SelfDescribingMarshallable> {
         // send to Artemis
         SequenceBarrier barrier = _disruptor.after(numberingAndSerializeHandler).asSequenceBarrier();
         for (int port : _cfg.getRealtimePorts()) {
-            OdinProcessor odinProcessor = new OdinProcessor(
+            OdinProcessor<T> odinProcessor = new OdinProcessor<>(
                     _ring_buffer,
                     barrier,
                     _zmq_context,
@@ -220,7 +219,7 @@ public class Odin<T extends SelfDescribingMarshallable> {
     public boolean send(T event) {
         try {
             if (_status.get() != RUNNING) return false;
-            _ring_buffer.publishEvent((newEvent, sequence, srcEvent) -> srcEvent.copyTo(newEvent.getData()), event);
+            _ring_buffer.publishEvent((newEvent, sequence, srcEvent) -> _cloner.accept(srcEvent, newEvent.getData()), event);
             return true;
         } catch (Exception ex) {
             log.error("Odin send error, event {}", event.toString(), ex);
@@ -230,9 +229,9 @@ public class Odin<T extends SelfDescribingMarshallable> {
 
 
     // Tạo một instance mới của class được chỉ định
-    private OdinDisruptorEvent _eventFactory() {
+    private OdinDisruptorEvent<T> _eventFactory() {
         try {
-            OdinDisruptorEvent event = new OdinDisruptorEvent();
+            OdinDisruptorEvent<T> event = new OdinDisruptorEvent<>();
             event.setData(_dataType.newInstance());
             return event;
         } catch (Exception ex) {

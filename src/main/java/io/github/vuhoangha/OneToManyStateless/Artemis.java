@@ -8,9 +8,7 @@ import io.github.vuhoangha.Common.*;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
-import net.openhft.chronicle.wire.SelfDescribingMarshallable;
-import net.openhft.chronicle.wire.Wire;
-import net.openhft.chronicle.wire.WireType;
+import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
@@ -23,18 +21,19 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 @Slf4j
-public class Artemis<T extends SelfDescribingMarshallable> {
+public class Artemis<T extends WriteBytesMarshallable> {
 
     private final int IDLE = 0, STARTING = 1, RUNNING = 2, STOP = 3;
     private final AtomicInteger _status = new AtomicInteger(IDLE);
 
     ScheduledExecutorService _extor_check_msg = Executors.newScheduledThreadPool(1);
-    private final NavigableMap<Long, ArtemisCacheMsg> _msg_wait = new TreeMap<>();      // môi trường đơn luồng
-    private final ObjectPool<ArtemisCacheMsg> _object_pool;     // môi trường đơn luồng
-    private final ArtemisHandler _onData;
+    private final NavigableMap<Long, ArtemisCacheMsg<T>> _msg_wait = new TreeMap<>();      // môi trường đơn luồng
+    private final ObjectPool<ArtemisCacheMsg<T>> _object_pool;     // môi trường đơn luồng
+    private final ArtemisHandler<T> _onData;
     private final Consumer<String> _onInterrupt;
     private final Consumer<String> _onWarning;
     private final ArtemisCfg _cfg;
@@ -52,10 +51,10 @@ public class Artemis<T extends SelfDescribingMarshallable> {
     List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
     private final Bytes<ByteBuffer> _byte_sub_msg = Bytes.elasticByteBuffer();          // dùng để xử lý msg lấy từ sub msg
     private final Bytes<ByteBuffer> _byte_process_msg = Bytes.elasticByteBuffer();     // dùng để xử lý msg trong process
-    private final Wire _wire_process_msg = WireType.BINARY.apply(_byte_process_msg);
+    private final BiConsumer<T, Bytes<ByteBuffer>> _byte_reader;                        // dùng để đọc 1 đối tượng từ byte sang Obj mà ko cần khởi tạo lại đối tượng
 
 
-    public Artemis(ArtemisCfg cfg, Class<T> dataType, ArtemisHandler onData, Consumer<String> onInterrupt, Consumer<String> onWarning) {
+    public Artemis(ArtemisCfg cfg, Class<T> dataType, BiConsumer<T, Bytes<ByteBuffer>> byteReader, ArtemisHandler<T> onData, Consumer<String> onInterrupt, Consumer<String> onWarning) {
         // validate
         Utils.checkNull(cfg.getSourceIP(), "Require source IP");
         Utils.checkNull(dataType, "Require dataType");
@@ -67,7 +66,8 @@ public class Artemis<T extends SelfDescribingMarshallable> {
         _dataType = dataType;
         _onInterrupt = onInterrupt;
         _onWarning = onWarning;
-        _object_pool = new ObjectPool<>(cfg.getMaxObjectsPoolWait(), ArtemisCacheMsg.class);
+        _byte_reader = byteReader;
+        _object_pool = new ObjectPool<>(cfg.getMaxObjectsPoolWait(), ArtemisCacheMsg::new);
         _zmq_context = new ZContext();
 
         _status.set(STARTING);
@@ -297,7 +297,7 @@ public class Artemis<T extends SelfDescribingMarshallable> {
                 // nếu đã chờ rất rất lâu thì interrupt --> báo cho tầng ứng dụng biết
                 // nếu ko có msg chờ thì bỏ qua
                 if (!_msg_wait.isEmpty() && _status.get() == RUNNING) {
-                    ArtemisCacheMsg msg = _msg_wait.firstEntry().getValue();
+                    ArtemisCacheMsg<T> msg = _msg_wait.firstEntry().getValue();
                     if (msg.getRcvTime() + _cfg.getTimeoutMustResyncMs() < System.currentTimeMillis()) {
                         _status.set(STOP);
                         _onInterrupt.accept("Msg wait so long");
@@ -337,7 +337,7 @@ public class Artemis<T extends SelfDescribingMarshallable> {
     // kiểm tra xem có msg chờ nào có thể xử lý không
     private void _checkWaitMsgCanProcess() {
         while (!_msg_wait.isEmpty() && _msg_wait.firstKey() <= _seq + 1) {
-            ArtemisCacheMsg msg = _msg_wait.remove(_msg_wait.firstKey());
+            ArtemisCacheMsg<T> msg = _msg_wait.remove(_msg_wait.firstKey());
             _processOneMsg(msg);
         }
     }
@@ -353,13 +353,12 @@ public class Artemis<T extends SelfDescribingMarshallable> {
     // "bytesIn" dữ liệu được bên source gửi về. Có thể chứa 1 hoặc nhiều bản ghi liên tiếp
     private void _processOneMsg(Bytes<ByteBuffer> bytesIn) {
         try {
-            ArtemisCacheMsg msg = _getCacheMsg();
+            ArtemisCacheMsg<T> msg = _getCacheMsg();
             msg.setVersion(bytesIn.readLong());
             msg.setSequence(bytesIn.readLong());
             _byte_process_msg.clear();
-            _wire_process_msg.clear();
             bytesIn.read(_byte_process_msg, bytesIn.readInt());
-            msg.getData().readMarshallable(_wire_process_msg);
+            _byte_reader.accept(msg.getData(), _byte_process_msg);
 
             _processOneMsg(msg);
         } catch (Exception ex) {
@@ -368,13 +367,13 @@ public class Artemis<T extends SelfDescribingMarshallable> {
     }
 
 
-    private void _processOneMsg(ArtemisCacheMsg msg) {
+    private void _processOneMsg(ArtemisCacheMsg<T> msg) {
         try {
             // version mới --> ko xử lý, reset lại toàn bộ waitlist và thông báo cho ứng dụng bên ngoài biết cần restart lại
             if (msg.getVersion() != _version && _version > 0) {
                 if (_status.compareAndSet(RUNNING, STOP)) {
                     while (!_msg_wait.isEmpty()) {
-                        ArtemisCacheMsg cacheMsg = _msg_wait.remove(_msg_wait.firstKey());
+                        ArtemisCacheMsg<T> cacheMsg = _msg_wait.remove(_msg_wait.firstKey());
                         _returnCacheMsg(cacheMsg);
                     }
                     _status.set(STOP);
@@ -492,20 +491,20 @@ public class Artemis<T extends SelfDescribingMarshallable> {
 
     //region OBJECT POOL
     // lấy đối tượng từ pool
-    private ArtemisCacheMsg _getCacheMsg() {
+    private ArtemisCacheMsg<T> _getCacheMsg() {
         try {
-            ArtemisCacheMsg msg = _object_pool.pop();
+            ArtemisCacheMsg<T> msg = _object_pool.pop();
             if (msg.getData() == null) {
                 msg.setData(_dataType.newInstance());
             }
             return msg;
         } catch (Exception ex) {
-            return new ArtemisCacheMsg();
+            return new ArtemisCacheMsg<>();
         }
     }
 
     // trả lại đối tượng về cho pool
-    private void _returnCacheMsg(ArtemisCacheMsg msg) {
+    private void _returnCacheMsg(ArtemisCacheMsg<T> msg) {
         _object_pool.push(msg);
     }
     //endregion
