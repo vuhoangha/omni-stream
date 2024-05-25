@@ -13,9 +13,6 @@ public class ConcurrentObjectPool<T> {
         this.maxSize = maxSize;
         this.factory = factory;
         this.pool = new ConcurrentLinkedQueue<>();
-        for (int i = 0; i < maxSize; i++) {
-            pool.add(factory.get());
-        }
     }
 
     public T pop() {
