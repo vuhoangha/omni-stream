@@ -1,7 +1,11 @@
 package io.github.vuhoangha.OneToManyStateless;
 
-public interface ArtemisHandler<T> {
+import net.openhft.chronicle.bytes.Bytes;
 
-    void apply(long version, long seq, T data);
+import java.nio.ByteBuffer;
+
+public interface ArtemisHandler {
+
+    void apply(long version, long seq, Bytes<ByteBuffer> data);
 
 }

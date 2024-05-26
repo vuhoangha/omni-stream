@@ -12,14 +12,14 @@ import org.zeromq.ZMQ;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
-public class OdinProcessor<T extends WriteBytesMarshallable> implements EventProcessor {
+public class OdinProcessor implements EventProcessor {
 
     private static final int IDLE = 0;              // trạng thái nằm im
     private static final int HALTED = IDLE + 1;     // trạng thái đã dừng
     private static final int RUNNING = HALTED + 1;  // trạng thái đang chạy
     private final AtomicInteger running = new AtomicInteger(IDLE);      // quản lý trạng thái hiện tại của processor
 
-    private final RingBuffer<OdinDisruptorEvent<T>> ringBuffer;
+    private final RingBuffer<OdinDisruptorEvent> ringBuffer;
     private final Sequence sequence = new Sequence(Sequencer.INITIAL_CURSOR_VALUE);     // quản lý số thứ tự trong processor
 
     /*
@@ -34,7 +34,7 @@ public class OdinProcessor<T extends WriteBytesMarshallable> implements EventPro
 
 
     public OdinProcessor(
-            RingBuffer<OdinDisruptorEvent<T>> ringBuffer,
+            RingBuffer<OdinDisruptorEvent> ringBuffer,
             SequenceBarrier sequenceBarrier,
             ZContext zContext,
             int port,

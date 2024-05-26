@@ -1,7 +1,11 @@
 package io.github.vuhoangha.Example;
 
 import io.github.vuhoangha.OneToManyStateless.*;
+import net.openhft.chronicle.bytes.Bytes;
+import net.openhft.chronicle.wire.Wire;
+import net.openhft.chronicle.wire.WireType;
 
+import java.nio.ByteBuffer;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
 
@@ -14,28 +18,32 @@ public class OdinArtemisExample {
     }
 
     public static void runOdin() {
-        Odin<CarTest> odin = new Odin<>(
-                OdinCfg.getDefault(),
-                CarTest.class,
-                CarTest::clone
+        Odin odin = new Odin(
+                OdinCfg.getDefault()
         );
 
         int count = 0;
+        Bytes<ByteBuffer> data = Bytes.elasticByteBuffer();
         while (true) {
             count++;
             CarTest car = new CarTest(count, count + 1000);
             System.out.println("\n\uD83D\uDE80Send: " + car);
-            odin.send(car);
+            data.clear();
+            car.writeMarshallable(data);
+            odin.send(data);
             LockSupport.parkNanos(100_000_000L);
         }
     }
 
+
     public static void runArtemis() {
-        ArtemisHandler<CarTest> onData = (long version, long seq, CarTest data) -> {
+        CarTest car = new CarTest();
+        ArtemisHandler onData = (long version, long seq, Bytes<ByteBuffer> data) -> {
             System.out.println("\uD83D\uDCE9Received");
             System.out.println("Version: " + version);
-            System.out.println("Car: " + data.toString());
             System.out.println("Seq: " + seq);
+            CarTest.reader(car, data);
+            System.out.println("Car: " + car.toString());
         };
         Consumer<String> onInterrupt = (String reason) -> {
             System.out.println("\uD83D\uDCE9Interrupt: " + reason);
@@ -44,10 +52,8 @@ public class OdinArtemisExample {
             System.out.println("\uD83D\uDCE9Warning: " + reason);
         };
 
-        new Artemis<>(
+        new Artemis(
                 ArtemisCfg.getDefault().setSourceIP("127.0.0.1"),
-                CarTest.class,
-                CarTest::reader,
                 onData,
                 onInterrupt,
                 onWarning

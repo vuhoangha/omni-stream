@@ -26,7 +26,7 @@ import java.util.concurrent.locks.LockSupport;
 import java.util.function.BiConsumer;
 
 @Slf4j
-public class Odin<T extends WriteBytesMarshallable> {
+public class Odin {
 
     // quản lý trạng thái
     private final int IDLE = 0, RUNNING = 1, STOPPED = 2;
@@ -39,24 +39,18 @@ public class Odin<T extends WriteBytesMarshallable> {
     private final OdinCfg _cfg;
     Bytes<ByteBuffer> _byte_temp_disruptor = Bytes.elasticByteBuffer();
     Bytes<ByteBuffer> _byte_disruptor = Bytes.elasticByteBuffer();
-    private Disruptor<OdinDisruptorEvent<T>> _disruptor;
-    private RingBuffer<OdinDisruptorEvent<T>> _ring_buffer;
+    private Disruptor<OdinDisruptorEvent> _disruptor;
+    private RingBuffer<OdinDisruptorEvent> _ring_buffer;
     private final ZContext _zmq_context;
     List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
     private final ConcurrencyObjectPool<OdinCacheEvent> _object_pool;
     private final OdinCacheControl _odin_cache_control = new OdinCacheControl();
     ScheduledExecutorService _remove_expiry_cache_executor = Executors.newScheduledThreadPool(1);
-    private final Class<T> _dataType;
-    private final BiConsumer<T, T> _cloner;     // clone giá trị 2 object
 
 
-    public Odin(OdinCfg cfg, Class<T> dataType, BiConsumer<T, T> cloner) {
-        Utils.checkNull(dataType, "Require dataType");
-
+    public Odin(OdinCfg cfg) {
         _cfg = cfg;
-        _cloner = cloner;
         _status.set(RUNNING);
-        _dataType = dataType;
         _zmq_context = new ZContext();
         _object_pool = new ConcurrencyObjectPool<>(cfg.getObjectPoolSize(), OdinCacheEvent.class);
 
@@ -106,16 +100,15 @@ public class Odin<T extends WriteBytesMarshallable> {
 
 
     // chuyển dữ liệu sang binary và lưu vào cache
-    private void numberingAndSerialize(OdinDisruptorEvent<T> event, long sequence, boolean endOfBatch) {
+    private void numberingAndSerialize(OdinDisruptorEvent event, long sequence, boolean endOfBatch) {
         try {
             _seq++;
 
             // convert dữ liệu sang binary [version][seq][data_length][data]
-            event.getData().writeMarshallable(_byte_temp_disruptor);
             _byte_disruptor.writeLong(_version);
             _byte_disruptor.writeLong(_seq);
-            _byte_disruptor.writeInt((int) _byte_temp_disruptor.writePosition());
-            _byte_disruptor.write(_byte_temp_disruptor);
+            _byte_disruptor.writeInt((int) event.getData().writePosition());
+            _byte_disruptor.write(event.getData());
             event.setBinary(_byte_disruptor.toByteArray());
 
             // lấy object từ pool và lưu vào cache
@@ -137,14 +130,14 @@ public class Odin<T extends WriteBytesMarshallable> {
         log.info("Odin run disruptor on logical processor {}", Affinity.getCpu());
 
         _disruptor = new Disruptor<>(
-                this::_eventFactory,
+                OdinDisruptorEvent::new,
                 _cfg.getRingBufferSize(),
                 new OdinThreadProcessor(_cfg),
                 ProducerType.MULTI,
                 _cfg.getDisruptorWaitStrategy());
         _ring_buffer = _disruptor.getRingBuffer();
 
-        EventHandler<OdinDisruptorEvent<T>> numberingAndSerializeHandler = this::numberingAndSerialize;
+        EventHandler<OdinDisruptorEvent> numberingAndSerializeHandler = this::numberingAndSerialize;
 
         // serialize data
         _disruptor.handleEventsWith(numberingAndSerializeHandler);
@@ -152,7 +145,7 @@ public class Odin<T extends WriteBytesMarshallable> {
         // send to Artemis
         SequenceBarrier barrier = _disruptor.after(numberingAndSerializeHandler).asSequenceBarrier();
         for (int port : _cfg.getRealtimePorts()) {
-            OdinProcessor<T> odinProcessor = new OdinProcessor<>(
+            OdinProcessor odinProcessor = new OdinProcessor(
                     _ring_buffer,
                     barrier,
                     _zmq_context,
@@ -216,27 +209,17 @@ public class Odin<T extends WriteBytesMarshallable> {
     }
 
 
-    public boolean send(T event) {
+    public boolean send(Bytes<ByteBuffer> data) {
         try {
             if (_status.get() != RUNNING) return false;
-            _ring_buffer.publishEvent((newEvent, sequence, srcEvent) -> _cloner.accept(srcEvent, newEvent.getData()), event);
+            _ring_buffer.publishEvent((newEvent, sequence, srcEvent) -> {
+                newEvent.getData().clear();
+                newEvent.getData().write(srcEvent);
+            }, data);
             return true;
         } catch (Exception ex) {
-            log.error("Odin send error, event {}", event.toString(), ex);
+            log.error("Odin send error, event {}", data.toString(), ex);
             return false;
-        }
-    }
-
-
-    // Tạo một instance mới của class được chỉ định
-    private OdinDisruptorEvent<T> _eventFactory() {
-        try {
-            OdinDisruptorEvent<T> event = new OdinDisruptorEvent<>();
-            event.setData(_dataType.newInstance());
-            return event;
-        } catch (Exception ex) {
-            log.error("Fanout _eventFactory error", ex);
-            return null;
         }
     }
 
