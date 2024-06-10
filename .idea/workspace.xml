@@ -6,15 +6,8 @@
   <component name="ChangeListManager">
     <list default="true" id="818b36f8-e38c-424e-9c59-f4958314ad3a" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/log/distribute-queue.log" beforeDir="false" afterPath="$PROJECT_DIR$/log/distribute-queue.log" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Example/OdinArtemisExample.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Example/OdinArtemisExample.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Main.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Main.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/Artemis.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/Artemis.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/ArtemisCacheMsg.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/ArtemisCacheMsg.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/ArtemisHandler.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/ArtemisHandler.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/Odin.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/Odin.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/OdinDisruptorEvent.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/OdinDisruptorEvent.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/OdinProcessor.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/OdinProcessor.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pom.xml" beforeDir="false" afterPath="$PROJECT_DIR$/pom.xml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
