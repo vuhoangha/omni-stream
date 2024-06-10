@@ -81,6 +81,10 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
 
         _status.set(SYNCING);
 
+        // bắt đầu lắng nghe việc ghi vào queue
+        new Thread(this::_onWriteQueue).start();
+        LockSupport.parkNanos(1_000_000_000L);
+
         // chạy đồng bộ dữ liệu với source trước
         new Thread(this::_sync).start();
 
@@ -200,7 +204,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
                         _cfg.getCpu(),
                         _cfg.getEnableCheckMissMsgAndSubQueueBindingCore(),
                         _cfg.getCheckMissMsgAndSubQueueCpu(),
-                        this::_initCheckMissMsgAndListenQueue));
+                        this::_initCheckMissMsg));
 
         // Control miss msg and subscribe queue
         _affinity_composes.add(
@@ -239,9 +243,9 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
 
 
     /**
-     * Check các msg bị miss và lắng nghe các msg mới được ghi vào queue để gửi cho application
+     * Check các msg bị miss
      */
-    private void _initCheckMissMsgAndListenQueue() {
+    private void _initCheckMissMsg() {
         LOGGER.info("Sinkin run check miss msg and subscribe queue on logical processor {}", Affinity.getCpu());
 
         /*
@@ -274,9 +278,6 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
          */
         _extor_check_msg.scheduleAtFixedRate(this::_checkLatestMsg, 1000, _cfg.getTimeRateGetLatestMsgMS(), TimeUnit.MILLISECONDS);
         _extor_check_msg.scheduleAtFixedRate(this::_checkLongTimeMsg, 10, _cfg.getTimeRateGetMissMsgMS(), TimeUnit.MILLISECONDS);
-
-        // bắt đầu lắng nghe việc ghi vào queue
-        new Thread(this::_onWriteQueue).start();
     }
 
 
@@ -603,7 +604,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         Runnable waiter = OmniWaitStrategy.getWaiter(_cfg.getQueueWaitStrategy());
 
         try {
-            while (_status.get() == RUNNING) {
+            while (_status.get() == RUNNING || _status.get() == SYNCING) {
                 if (tailer.readBytes(byte_read)) {
                     version = byte_read.readByte();   // version
                     byte_read.read(byte_msg_data, byte_read.readInt()); // data
