@@ -133,6 +133,35 @@ public class Snipper<T extends SelfDescribingMarshallable> {
     }
 
 
+    // TODO gom lại hàm này với hàm send phía trên
+    public CompletableFuture<Boolean> sendAsync(T data) {
+        try {
+            long reqId = _sequence_id.incrementAndGet();
+
+            // quản lý thời gian timeout
+            _map_item_with_time.put(reqId, System.currentTimeMillis() + _cfg.getTimeout());
+
+            // quản lý callback trả về
+            CompletableFuture<Boolean> cb = new CompletableFuture<>();
+            _map_item_with_callback.put(reqId, cb);
+
+            // gửi sang luồng chính để gửi cho core
+            _ring_buffer_send_msg.publishEvent(
+                    (newEvent, sequence, __id, __data, __expiry) -> {
+                        newEvent.setId(__id);
+                        newEvent.setData(__data);
+                        newEvent.setExpiry(__expiry);
+                    },
+                    reqId, data, getExpiry());
+
+            return cb;
+        } catch (Exception ex) {
+            LOGGER.error("Snipper send async error, data {}", data.toString(), ex);
+            return null;
+        }
+    }
+
+
     private long getExpiry() {
         return System.currentTimeMillis() + _cfg.getTtl() - _time_latency.get();
     }
