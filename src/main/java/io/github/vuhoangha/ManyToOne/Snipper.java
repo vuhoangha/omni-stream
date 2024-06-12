@@ -6,6 +6,7 @@ import com.lmax.disruptor.dsl.ProducerType;
 import io.github.vuhoangha.Common.AffinityCompose;
 import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.Utils;
+import io.github.vuhoangha.common.Promise;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
 import net.openhft.chronicle.core.io.ReferenceOwner;
@@ -46,7 +47,7 @@ public class Snipper<T extends SelfDescribingMarshallable> {
     // map id của item với thời gian tối đa nó chờ bên Collector xác nhận
     private final ConcurrentNavigableMap<Long, Long> _map_item_with_time = new ConcurrentSkipListMap<>();
     // map id của item với callback để call lại khi cần
-    private final ConcurrentHashMap<Long, CompletableFuture<Boolean>> _map_item_with_callback = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, Promise<Boolean>> _map_item_with_callback = new ConcurrentHashMap<>();
     // quản lý id của các request. ID sẽ increment sau mỗi request
     private final AtomicLong _sequence_id = new AtomicLong(System.currentTimeMillis());
     // độ trễ thời gian giữa Snipper và Collector = snipper_time - collector_time
@@ -105,7 +106,7 @@ public class Snipper<T extends SelfDescribingMarshallable> {
     }
 
 
-    public boolean send(T data) {
+    public boolean send(T data, Promise<Boolean> cb, long timeInterval) {
         try {
             long reqId = _sequence_id.incrementAndGet();
 
@@ -113,7 +114,6 @@ public class Snipper<T extends SelfDescribingMarshallable> {
             _map_item_with_time.put(reqId, System.currentTimeMillis() + _cfg.getTimeout());
 
             // quản lý callback trả về
-            CompletableFuture<Boolean> cb = new CompletableFuture<>();
             _map_item_with_callback.put(reqId, cb);
 
             // gửi sang luồng chính để gửi cho core
@@ -125,7 +125,7 @@ public class Snipper<T extends SelfDescribingMarshallable> {
                     },
                     reqId, data, getExpiry());
 
-            return cb.get();
+            return cb.get(timeInterval);
         } catch (Exception ex) {
             LOGGER.error("Snipper send error, data {}", data.toString(), ex);
             return false;
@@ -133,32 +133,14 @@ public class Snipper<T extends SelfDescribingMarshallable> {
     }
 
 
-    // TODO gom lại hàm này với hàm send phía trên
-    public CompletableFuture<Boolean> sendAsync(T data) {
-        try {
-            long reqId = _sequence_id.incrementAndGet();
+    public boolean send(T data, long timeInterval) {
+        Promise<Boolean> cb = new Promise<>();
+        return send(data, cb, timeInterval);
+    }
 
-            // quản lý thời gian timeout
-            _map_item_with_time.put(reqId, System.currentTimeMillis() + _cfg.getTimeout());
 
-            // quản lý callback trả về
-            CompletableFuture<Boolean> cb = new CompletableFuture<>();
-            _map_item_with_callback.put(reqId, cb);
-
-            // gửi sang luồng chính để gửi cho core
-            _ring_buffer_send_msg.publishEvent(
-                    (newEvent, sequence, __id, __data, __expiry) -> {
-                        newEvent.setId(__id);
-                        newEvent.setData(__data);
-                        newEvent.setExpiry(__expiry);
-                    },
-                    reqId, data, getExpiry());
-
-            return cb;
-        } catch (Exception ex) {
-            LOGGER.error("Snipper send async error, data {}", data.toString(), ex);
-            return null;
-        }
+    public boolean send(T data) {
+        return send(data, 1_000_000L);
     }
 
 

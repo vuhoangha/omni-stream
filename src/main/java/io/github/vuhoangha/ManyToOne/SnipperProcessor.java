@@ -4,6 +4,7 @@ import com.lmax.disruptor.*;
 import io.github.vuhoangha.Common.OmniWaitStrategy;
 import io.github.vuhoangha.Common.ReflectionUtils;
 import io.github.vuhoangha.Common.Utils;
+import io.github.vuhoangha.common.Promise;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
 import net.openhft.chronicle.wire.Wire;
@@ -16,7 +17,6 @@ import org.zeromq.ZMQ;
 
 import java.nio.ByteBuffer;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentNavigableMap;
 
@@ -36,7 +36,7 @@ public class SnipperProcessor implements Runnable {
     // map id của item với thời gian tối đa nó chờ bên Collector xác nhận
     private final ConcurrentNavigableMap<Long, Long> _map_item_with_time;
     // map id của item với callback để call lại khi cần
-    private final ConcurrentHashMap<Long, CompletableFuture<Boolean>> _map_item_with_callback;
+    private final ConcurrentHashMap<Long, Promise<Boolean>> _map_item_with_callback;
     // bao lâu quét check timeout 1 lần
     private final long _time_out_interval_ms = 1000;
     // chiến lược nghỉ ngơi giữa các vòng lặp
@@ -49,7 +49,7 @@ public class SnipperProcessor implements Runnable {
             String socketUrl,
             OmniWaitStrategy waitStrategy,
             ConcurrentNavigableMap<Long, Long> mapItemWithTime,
-            ConcurrentHashMap<Long, CompletableFuture<Boolean>> mapItemWithCallback) {
+            ConcurrentHashMap<Long, Promise<Boolean>> mapItemWithCallback) {
         this._ring_buffer = ringBuffer;
         this._sequencer = ReflectionUtils.extractSequencer(ringBuffer);
         this._zContext = context;
@@ -112,7 +112,7 @@ public class SnipperProcessor implements Runnable {
                         // xóa khỏi cache --> callback về
                         reqID = Utils.bytesToLong(reply);
                         _map_item_with_time.remove(reqID);
-                        CompletableFuture<Boolean> cb = _map_item_with_callback.remove(reqID);
+                        Promise<Boolean> cb = _map_item_with_callback.remove(reqID);
                         if (cb != null)
                             cb.complete(true);
                     } else {
@@ -128,7 +128,7 @@ public class SnipperProcessor implements Runnable {
                         if (firstEntry.getValue() < nowMS) {
                             // bị timeout --> xóa khỏi cache --> callback về
                             _map_item_with_time.remove(firstEntry.getKey());
-                            CompletableFuture<Boolean> cb = _map_item_with_callback.remove(firstEntry.getKey());
+                            Promise<Boolean> cb = _map_item_with_callback.remove(firstEntry.getKey());
                             cb.complete(false);
                             LOGGER.warn("Snipper send msg timeout");
                         } else {

@@ -6,7 +6,7 @@
 
     <groupId>io.github.vuhoangha</groupId>
     <artifactId>omni-stream</artifactId>
-    <version>1.0.12</version>
+    <version>1.0.13</version>
     <packaging>jar</packaging>
 
     <name>Omni Stream</name>
@@ -95,6 +95,13 @@
             <artifactId>lombok</artifactId>
             <version>1.18.32</version>
             <scope>provided</scope>
+        </dependency>
+
+        <!-- Omni Collection -->
+        <dependency>
+            <groupId>io.github.vuhoangha</groupId>
+            <artifactId>omni-collection</artifactId>
+            <version>1.0.3</version>
         </dependency>
 
 
