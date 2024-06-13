@@ -5,6 +5,7 @@ import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
 import io.github.vuhoangha.Common.*;
+import io.github.vuhoangha.common.SynchronizeObjectPool;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
 import net.openhft.chronicle.core.io.ReferenceOwner;
@@ -39,7 +40,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
     private final ReferenceOwner _ref_id = ReferenceOwner.temporary("Sinkin");
     ScheduledExecutorService _extor_check_msg = Executors.newScheduledThreadPool(1);
     private final NavigableMap<Long, TranspotMsg> _msg_wait = new TreeMap<>();
-    private final ObjectPool<TranspotMsg> _object_pool;
+    private final SynchronizeObjectPool<TranspotMsg> _object_pool;
     private final SinkinHandler _handler;
     private final Class<T> _dataType;
     private final SinkinCfg _cfg;
@@ -68,7 +69,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         _cfg = cfg;
         _dataType = dataType;
         _handler = handler;
-        _object_pool = new ObjectPool<>(cfg.getMaxObjectsPoolWait(), TranspotMsg::new);
+        _object_pool = new SynchronizeObjectPool<>(new TranspotMsg[cfg.getMaxObjectsPoolWait()], TranspotMsg::new);
         _zmq_context = new ZContext();
 
         _queue = SingleChronicleQueueBuilder

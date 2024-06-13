@@ -5,6 +5,7 @@ import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
 import io.github.vuhoangha.Common.*;
+import io.github.vuhoangha.common.SynchronizeObjectPool;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
@@ -30,7 +31,7 @@ public class Artemis {
 
     ScheduledExecutorService _extor_check_msg = Executors.newScheduledThreadPool(1);
     private final NavigableMap<Long, ArtemisCacheMsg> _msg_wait = new TreeMap<>();      // môi trường đơn luồng
-    private final ObjectPool<ArtemisCacheMsg> _object_pool;     // môi trường đơn luồng
+    private final SynchronizeObjectPool<ArtemisCacheMsg> _object_pool;     // môi trường đơn luồng
     private final ArtemisHandler _onData;
     private final Consumer<String> _onInterrupt;
     private final Consumer<String> _onWarning;
@@ -60,7 +61,7 @@ public class Artemis {
         _onData = onData;
         _onInterrupt = onInterrupt;
         _onWarning = onWarning;
-        _object_pool = new ObjectPool<>(cfg.getMaxObjectsPoolWait(), ArtemisCacheMsg::new);
+        _object_pool = new SynchronizeObjectPool<>(new ArtemisCacheMsg[cfg.getMaxObjectsPoolWait()], ArtemisCacheMsg::new);
         _zmq_context = new ZContext();
 
         _status.set(STARTING);

@@ -6,6 +6,7 @@ import com.lmax.disruptor.SequenceBarrier;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
 import io.github.vuhoangha.Common.*;
+import io.github.vuhoangha.common.ConcurrentObjectPool;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
@@ -43,7 +44,7 @@ public class Odin {
     private RingBuffer<OdinDisruptorEvent> _ring_buffer;
     private final ZContext _zmq_context;
     List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
-    private final ConcurrencyObjectPool<OdinCacheEvent> _object_pool;
+    private final ConcurrentObjectPool<OdinCacheEvent> _object_pool;
     private final OdinCacheControl _odin_cache_control = new OdinCacheControl();
     ScheduledExecutorService _remove_expiry_cache_executor = Executors.newScheduledThreadPool(1);
 
@@ -52,7 +53,7 @@ public class Odin {
         _cfg = cfg;
         _status.set(RUNNING);
         _zmq_context = new ZContext();
-        _object_pool = new ConcurrencyObjectPool<>(cfg.getObjectPoolSize(), OdinCacheEvent.class);
+        _object_pool = new ConcurrentObjectPool<>(cfg.getObjectPoolSize(), OdinCacheEvent::new);
 
         // định kỳ xóa item quá hạn trong cache
         _remove_expiry_cache_executor.scheduleAtFixedRate(
@@ -242,7 +243,6 @@ public class Odin {
             affinityCompose.release();
 
         _remove_expiry_cache_executor.shutdownNow();
-        _object_pool.clear();
         _byte_disruptor.releaseLast();
         _byte_temp_disruptor.releaseLast();
 
