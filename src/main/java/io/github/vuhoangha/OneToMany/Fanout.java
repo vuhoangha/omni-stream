@@ -9,15 +9,13 @@ import io.github.vuhoangha.Common.OmniWaitStrategy;
 import io.github.vuhoangha.Common.Utils;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
+import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 import net.openhft.chronicle.core.io.ReferenceOwner;
 import net.openhft.chronicle.queue.ExcerptAppender;
 import net.openhft.chronicle.queue.ExcerptTailer;
 import net.openhft.chronicle.queue.TailerDirection;
 import net.openhft.chronicle.queue.impl.single.SingleChronicleQueue;
 import net.openhft.chronicle.queue.impl.single.SingleChronicleQueueBuilder;
-import net.openhft.chronicle.wire.SelfDescribingMarshallable;
-import net.openhft.chronicle.wire.Wire;
-import net.openhft.chronicle.wire.WireType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.zeromq.SocketType;
@@ -32,7 +30,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 
-public class Fanout<T extends SelfDescribingMarshallable> {
+public class Fanout {
 
     // quản lý trạng thái
     private final int IDLE = 0, RUNNING = 1, STOPPED = 2;
@@ -46,22 +44,17 @@ public class Fanout<T extends SelfDescribingMarshallable> {
     private FanoutCfg _cfg;
     private SingleChronicleQueue _queue;
     private ExcerptAppender _appender;
-    Bytes<ByteBuffer> _byte_temp_disruptor = Bytes.elasticByteBuffer();
-    Wire _wire_temp_disruptor = WireType.BINARY.apply(_byte_temp_disruptor);
     Bytes<ByteBuffer> _byte_disruptor = Bytes.elasticByteBuffer();
-    private Disruptor<T> _disruptor;
-    private RingBuffer<T> _ring_buffer;
-    private Class<T> _data_type;
+    private Disruptor<Bytes<ByteBuffer>> _disruptor;
+    private RingBuffer<Bytes<ByteBuffer>> _ring_buffer;
     private ZContext _zmq_context;
     List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
 
-    public Fanout(FanoutCfg cfg, Class<T> dataType) {
+    public Fanout(FanoutCfg cfg) {
         // validate
         Utils.checkNull(cfg.getQueuePath(), "Require queuePath");
-        Utils.checkNull(dataType, "Require dataType");
 
         _cfg = cfg;
-        _data_type = dataType;
         _status.set(RUNNING);
         _zmq_context = new ZContext();
 
@@ -129,10 +122,10 @@ public class Fanout<T extends SelfDescribingMarshallable> {
         LOGGER.info("Fanout run disruptor on logical processor {}", Affinity.getCpu());
 
         _disruptor = new Disruptor<>(
-                () -> _eventFactory(_data_type),
+                Bytes::elasticByteBuffer,
                 _cfg.getRingBufferSize(),
                 Executors.newSingleThreadExecutor(),
-                ProducerType.MULTI,
+                ProducerType.SINGLE,
                 _cfg.getDisruptorWaitStrategy());
         _disruptor.handleEventsWith((event, sequence, endOfBatch) -> this._onWriteDisruptor(event));
         _disruptor.start();
@@ -259,48 +252,39 @@ public class Fanout<T extends SelfDescribingMarshallable> {
     }
 
 
-    public boolean write(T event) {
-        try {
-            if (_status.get() != RUNNING) return false;
-            _ring_buffer.publishEvent((newEvent, sequence, srcEvent) -> srcEvent.copyTo(newEvent), event);
-            return true;
-        } catch (Exception ex) {
-            LOGGER.error("Fanout write error, event {}", event.toString(), ex);
-            return false;
-        }
+    public void write(WriteBytesMarshallable data) {
+//        try {
+//            if (_status.get() == RUNNING)
+//                _ring_buffer.publishEvent((newEvent, sequence, srcEvent) -> {
+//                    srcEvent.writeMarshallable(newEvent);
+//                }, data);
+//        } catch (Exception ex) {
+//            LOGGER.error("Fanout write error, event {}", data.toString(), ex);
+//        }
+
+        data.writeMarshallable(_byte_disruptor);
+        _appender.writeBytes(_byte_disruptor);
+        _byte_disruptor.clear();
+
     }
 
 
-    // Tạo một instance mới của class được chỉ định
-    private T _eventFactory(Class<T> dataType) {
+    private void _onWriteDisruptor(Bytes<ByteBuffer> event) {
         try {
-            return dataType.newInstance();
-        } catch (Exception ex) {
-            LOGGER.error("Fanout _eventFactory error", ex);
-            return null;
-        }
-    }
-
-
-    private void _onWriteDisruptor(T event) {
-        try {
-            // chuyển event sang binary
-            event.writeMarshallable(_wire_temp_disruptor);
+//            if(true)return;
 
             // cấu trúc item trong queue: ["version"]["độ dài data"]["data"]["seq in queue"]
-            _byte_disruptor.writeByte(_cfg.getVersion());
-            _byte_disruptor.writeInt((int) _byte_temp_disruptor.writePosition());
-            _byte_disruptor.write(_byte_temp_disruptor);
-            _byte_disruptor.writeLong(++_seq_in_queue);
+//            _byte_disruptor.writeByte(_cfg.getVersion());
+//            _byte_disruptor.writeInt((int) event.writePosition());
+//            _byte_disruptor.write(event);
+//            _byte_disruptor.writeLong(++_seq_in_queue);
 
             // ghi vào trong Chronicle Queue
-            _appender.writeBytes(_byte_disruptor);
+            _appender.writeBytes(event);
         } catch (Exception ex) {
             LOGGER.error("Fanout on write disruptor error, event {}", event.toString(), ex);
         } finally {
-            _byte_temp_disruptor.clear();
-            _wire_temp_disruptor.clear();
-            _byte_disruptor.clear();
+            event.clear();
         }
     }
 
@@ -374,7 +358,6 @@ public class Fanout<T extends SelfDescribingMarshallable> {
         _queue.close();
 
         _byte_disruptor.release(_ref_id);
-        _byte_temp_disruptor.release(_ref_id);
 
         // giải phóng CPU core/Logical processor
         for (AffinityCompose affinityCompose : _affinity_composes)

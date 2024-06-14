@@ -37,21 +37,21 @@ public class OneToManyExample {
 
 
     public static void runSource() {
-        Fanout<PeopleTest> fanout = new Fanout<>(
-                FanoutCfg.builder().setQueuePath(sourcePath),
-                PeopleTest.class);
-
-        PeopleTest people = new PeopleTest();
-        int count = 0;
-        while (true) {
-            count++;
-            people.setIndex(count);
-            people.setName("people " + count);
-            System.out.println("\n\uD83D\uDE80Send: " + people);
-            fanout.write(people);
-
-            LockSupport.parkNanos(2_000_000_000L);
-        }
+//        Fanout<PeopleTest> fanout = new Fanout<>(
+//                FanoutCfg.builder().setQueuePath(sourcePath),
+//                PeopleTest.class);
+//
+//        PeopleTest people = new PeopleTest();
+//        int count = 0;
+//        while (true) {
+//            count++;
+//            people.setIndex(count);
+//            people.setName("people " + count);
+//            System.out.println("\n\uD83D\uDE80Send: " + people);
+//            fanout.write(people);
+//
+//            LockSupport.parkNanos(2_000_000_000L);
+//        }
     }
 
 }
