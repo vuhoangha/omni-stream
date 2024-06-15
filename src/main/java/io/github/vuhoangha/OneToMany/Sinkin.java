@@ -6,18 +6,13 @@ import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
 import io.github.vuhoangha.Common.*;
 import io.github.vuhoangha.common.SynchronizeObjectPool;
+import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
-import net.openhft.chronicle.core.io.ReferenceOwner;
 import net.openhft.chronicle.queue.ExcerptAppender;
 import net.openhft.chronicle.queue.ExcerptTailer;
 import net.openhft.chronicle.queue.impl.single.SingleChronicleQueue;
 import net.openhft.chronicle.queue.impl.single.SingleChronicleQueueBuilder;
-import net.openhft.chronicle.wire.SelfDescribingMarshallable;
-import net.openhft.chronicle.wire.Wire;
-import net.openhft.chronicle.wire.WireType;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
@@ -31,18 +26,15 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 
-public class Sinkin<T extends SelfDescribingMarshallable> {
+@Slf4j
+public class Sinkin {
 
     private final int IDLE = 0, SYNCING = 1, RUNNING = 2, STOP = 3;
     private final AtomicInteger _status = new AtomicInteger(IDLE);
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(Sinkin.class);
-    private final ReferenceOwner _ref_id = ReferenceOwner.temporary("Sinkin");
-    ScheduledExecutorService _extor_check_msg = Executors.newScheduledThreadPool(1);
+    ScheduledExecutorService _execs_check_msg = Executors.newScheduledThreadPool(1);
     private final NavigableMap<Long, TranspotMsg> _msg_wait = new TreeMap<>();
-    private final SynchronizeObjectPool<TranspotMsg> _object_pool;
-    private final SinkinHandler _handler;
-    private final Class<T> _dataType;
+    private final SynchronizeObjectPool<TranspotMsg> _transpot_msg_pool;
     private final SinkinCfg _cfg;
     private final SingleChronicleQueue _queue;
     private final ExcerptAppender _appender;
@@ -50,26 +42,26 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
     private long _src_latest_index;                                                 // src index của item mới nhất trong queue
     private final ZContext _zmq_context;
     private final Bytes<ByteBuffer> _byte_miss_msg = Bytes.elasticByteBuffer();     // dùng để tạo data lấy msg miss
-    private byte[] _byte_miss_msg_raw;                                              // dùng để lấy msg miss raw
+    private final Bytes<ByteBuffer> _byte_process_msg = Bytes.elasticByteBuffer();     // dùng để tạo data xử lý msg
     private Disruptor<SinkProcessMsg> _disruptor_process_msg;
     private RingBuffer<SinkProcessMsg> _ring_buffer_process_msg;
     private Disruptor<CheckMissMsg> _disruptor_miss_msg;
     private RingBuffer<CheckMissMsg> _ring_buffer_miss_msg;
     private SinkinMissCheckerProcessor _miss_check_processor;
     List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
+    private final SinkinHandler _handler;
 
 
-    public Sinkin(SinkinCfg cfg, Class<T> dataType, SinkinHandler handler) {
+    public Sinkin(SinkinCfg cfg, SinkinHandler handler) {
         // validate
         Utils.checkNull(cfg.getQueuePath(), "Require queuePath");
         Utils.checkNull(cfg.getSourceIP(), "Require source IP");
-        Utils.checkNull(dataType, "Require dataType");
         Utils.checkNull(handler, "Require handler");
 
         _cfg = cfg;
-        _dataType = dataType;
         _handler = handler;
-        _object_pool = new SynchronizeObjectPool<>(new TranspotMsg[cfg.getMaxObjectsPoolWait()], TranspotMsg::new);
+
+        _transpot_msg_pool = new SynchronizeObjectPool<>(new TranspotMsg[cfg.getMaxObjectsPoolWait()], TranspotMsg::new);
         _zmq_context = new ZContext();
 
         _queue = SingleChronicleQueueBuilder
@@ -77,8 +69,18 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
                 .rollCycle(_cfg.getRollCycles())
                 .build();
         _appender = _queue.acquireAppender();
-        _seq_in_queue = _queue.entryCount();   // tổng số item trong queue
-        _src_latest_index = _getLatestIndex();
+        LongLongObject lastestInfo = _getLatestInfo();
+        if (lastestInfo != null) {
+            _src_latest_index = lastestInfo.valueA;
+            if (lastestInfo.valueB != _queue.entryCount()) {
+                throw new RuntimeException(MessageFormat.format("Sequence in queue not match, latestInfo {0}, entryCount {1}", lastestInfo.valueB, _queue.entryCount()));
+            } else {
+                _seq_in_queue = _queue.entryCount();   // tổng số item trong queue
+            }
+        } else {
+            _src_latest_index = -1;
+            _seq_in_queue = 0;
+        }
 
         _status.set(SYNCING);
 
@@ -98,7 +100,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
      * Hàm này sẽ đồng bộ hoàn toàn msg từ src --> sink. Khi đã hoàn thành thì mới sub msg mới
      * cấu trúc request: ["type"]["src index"]
      * Cấu trúc response: ["msg_1"]["msg_2"]...vvv
-     * cấu trúc từng msg con msg_1, msg_2..vv:  ["version"]["độ dài data"]["data"]["seq in queue"]["src index"]
+     * cấu trúc từng msg con msg_1, msg_2..vv:  ["source native index 1"]["độ dài data 1 gồm cả seq in queue"]["seq in queue 1"]["data 1"]
      */
     private void _sync() {
         ZMQ.Socket socket = _zmq_context.createSocket(SocketType.REQ);
@@ -106,14 +108,14 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
 
         ExcerptAppender localAppender = _queue.acquireAppender();
         Bytes<ByteBuffer> byteRes = Bytes.elasticByteBuffer();   // chứa byte[] của tất cả bản ghi trả về
-        TranspotMsg transpotMsg = new TranspotMsg();
+        Bytes<ByteBuffer> byteToQueue = Bytes.elasticByteBuffer();   // chứa byte[] để ghi vào queue
 
         try {
             while (_status.get() == SYNCING) {
                 // tổng hợp data rồi req sang src
                 _byte_miss_msg.writeByte(Constance.FANOUT.CONFIRM.FROM_LATEST);
                 _byte_miss_msg.writeLong(_src_latest_index);
-                socket.send(_byte_miss_msg.toByteArray(), 0);
+                socket.send(_byte_miss_msg.underlyingObject().array(), 0);
                 _byte_miss_msg.clear();
 
                 // chờ dữ liệu trả về
@@ -121,37 +123,40 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
 
                 // nếu đã hết msg thì thôi
                 if (repData.length == 0) {
-                    LOGGER.info("Sinkin synced");
+                    log.info("Sinkin synced");
                     break;
                 }
 
-                LOGGER.info("Sinkin syncing......");
+                log.info("Sinkin syncing......");
 
                 // đọc tuần tự và xử lý
                 byteRes.write(repData);
+
                 while (byteRes.readRemaining() > 0) {
 
-                    // đọc từng field trong 1 item
-                    transpotMsg.setVersion(byteRes.readByte());
-                    byteRes.read(transpotMsg.getData(), byteRes.readInt());
-                    transpotMsg.setSeq(byteRes.readLong());
-                    transpotMsg.setSrcIndex(byteRes.readLong());
+                    // lấy phần dữ liệu để ghi vào queue
+                    int dataLen = byteRes.readInt();
+                    byteToQueue.write(byteRes, byteRes.readPosition(), 8 + 8 + dataLen);
+
+                    long srcIndex = byteRes.readLong();
+                    long seq = byteRes.readLong();
+                    byteRes.readSkip(dataLen);              // bỏ qua data chính
 
                     // nếu msg không tuần tự thì báo lỗi luôn
-                    if (transpotMsg.getSeq() != _seq_in_queue + 1) {
-                        LOGGER.error("Sinkin _sync not sequence, src_seq: {}, sink_seq: {}", transpotMsg.getSeq(), _seq_in_queue);
+                    if (seq != _seq_in_queue + 1) {
+                        log.error("Sinkin _sync not sequence, src_seq: {}, sink_seq: {}", seq, _seq_in_queue);
                         return;
                     }
 
                     // update seq và native index
                     _seq_in_queue++;
-                    _src_latest_index = transpotMsg.getSrcIndex();
+                    _src_latest_index = srcIndex;
 
                     // write to queue
-                    localAppender.writeBytes(transpotMsg.toBytes());
+                    localAppender.writeBytes(byteToQueue);
 
                     // clear temp data
-                    transpotMsg.clear();
+                    byteToQueue.clear();
                 }
                 byteRes.clear();
             }
@@ -169,21 +174,21 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
                             _cfg.getCpu(),
                             this::_mainProcess));
         } catch (Exception ex) {
-            LOGGER.error("Sinkin sync error", ex);
+            log.error("Sinkin sync error", ex);
         } finally {
             // giải phóng tài nguyên
             localAppender.close();
-            byteRes.release(_ref_id);
-            transpotMsg.destroy();
+            byteRes.releaseLast();
+            byteToQueue.releaseLast();
             socket.close();
 
-            LOGGER.info("Sinkin synced done !");
+            log.info("Sinkin synced done !");
         }
     }
 
 
     private void _mainProcess() {
-        LOGGER.info("Sinkin run main flow on logical processor {}", Affinity.getCpu());
+        log.info("Sinkin run main flow on logical processor {}", Affinity.getCpu());
 
         // khởi tạo disruptor xử lý các msg chính
         _affinity_composes.add(
@@ -229,7 +234,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
      * các yêu cầu check miss msg
      */
     private void _initDisruptorProcessMsg() {
-        LOGGER.info("Sinkin run disruptor process msg on logical processor {}", Affinity.getCpu());
+        log.info("Sinkin run disruptor process msg on logical processor {}", Affinity.getCpu());
 
         _disruptor_process_msg = new Disruptor<>(
                 SinkProcessMsg::new,
@@ -247,7 +252,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
      * Check các msg bị miss
      */
     private void _initCheckMissMsg() {
-        LOGGER.info("Sinkin run check miss msg and subscribe queue on logical processor {}", Affinity.getCpu());
+        log.info("Sinkin run check miss msg and subscribe queue on logical processor {}", Affinity.getCpu());
 
         /*
          * Check xem có msg nào bị miss ko
@@ -277,8 +282,8 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
          * định kỳ check xem có msg mới ko
          * định kỳ check xem msg trong hàng đợi có chờ quá lâu ko
          */
-        _extor_check_msg.scheduleAtFixedRate(this::_checkLatestMsg, 1000, _cfg.getTimeRateGetLatestMsgMS(), TimeUnit.MILLISECONDS);
-        _extor_check_msg.scheduleAtFixedRate(this::_checkLongTimeMsg, 10, _cfg.getTimeRateGetMissMsgMS(), TimeUnit.MILLISECONDS);
+        _execs_check_msg.scheduleAtFixedRate(this::_checkLatestMsg, 1000, _cfg.getTimeRateGetLatestMsgMS(), TimeUnit.MILLISECONDS);
+        _execs_check_msg.scheduleAtFixedRate(this::_checkLongTimeMsg, 10, _cfg.getTimeRateGetMissMsgMS(), TimeUnit.MILLISECONDS);
     }
 
 
@@ -302,7 +307,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
     private void _checkLongTimeMsg() {
         _ring_buffer_process_msg.publishEvent(
                 (newEvent, sequence, __type) -> newEvent.setType(__type),
-                Constance.SINKIN.PROCESSS_MSG_TYPE.CHECK_MISS);
+                Constance.SINKIN.PROCESS_MSG_TYPE.CHECK_MISS);
     }
 
 
@@ -310,7 +315,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
      * Sub các msg được src stream sang
      */
     private void _subMsg() {
-        LOGGER.info("Sinkin run subscribe msg on logical processor {}", Affinity.getCpu());
+        log.info("Sinkin run subscribe msg on logical processor {}", Affinity.getCpu());
 
         ZMQ.Socket subscriber = _zmq_context.createSocket(SocketType.SUB);
         subscriber.setRcvHWM(_cfg.getZmqSubBufferSize());   // setting buffer size các msg được nhận
@@ -331,33 +336,22 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         subscriber.connect(_cfg.getRealTimeUrl());
         subscriber.subscribe(ZMQ.SUBSCRIPTION_ALL);     // nhận tất cả tin nhắn từ publisher
 
-        // đọc các msg được gửi đến
-        Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
+        log.info("Sinkin start subscribe");
 
-        LOGGER.info("Sinkin start subscribe");
-
-        try {
-            // Nhận và xử lý tin nhắn
-            while (_status.get() == RUNNING) {
+        // Nhận và xử lý tin nhắn
+        while (_status.get() == RUNNING) {
+            try {
                 byte[] msg = subscriber.recv(0);
-                bytes.clear();
-                bytes.write(msg);
                 _ring_buffer_process_msg.publishEvent(
-                        (newEvent, sequence, __bytesParam) -> {
-                            newEvent.clear();
-                            newEvent.setType(__bytesParam.readByte());
-                            __bytesParam.read(newEvent.getData());
-                        },
-                        bytes);
+                        (newEvent, sequence, __bytesData) -> newEvent.setType(__bytesData[0]).setData(__bytesData),     // vì byte đầu tiên luôn là type nên ta lấy luôn
+                        msg);
+            } catch (Exception ex) {
+                log.error("Sinkin SubMsg error", ex);
             }
-        } catch (Exception ex) {
-            LOGGER.error("Sinkin SubMsg error", ex);
-        } finally {
-            bytes.release(_ref_id);
-            subscriber.close();
-
-            LOGGER.info("Sinkin end subscribe");
         }
+
+        subscriber.close();
+        log.info("Sinkin end subscribe");
     }
 
 
@@ -369,22 +363,46 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
      */
     private void _onMsg(SinkProcessMsg event) {
         try {
-            if (event.getType() == Constance.SINKIN.PROCESSS_MSG_TYPE.MSG) {
-                // chỉ có 1 msg duy nhất
+            if (event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.MSG) {
+                // chỉ có 1 msg duy nhất. Cấu trúc ["msg type"]["source native index 1"]["seq in queue 1"]["data 1"]
 
-                _processOneMsg(event.getData(), true);
-            } else if (event.getType() == Constance.SINKIN.PROCESSS_MSG_TYPE.MULTI_MSG) {
+                _byte_process_msg.write(event.getData());
+
+                TranspotMsg tMsg = _transpot_msg_pool.pop();
+
+                tMsg.getQueueData().write(_byte_process_msg, 1, _byte_process_msg.readLimit() - 1);
+
+                _byte_process_msg.readByte();       // byte đầu ko cần nên bỏ
+                tMsg.setSrcIndex(_byte_process_msg.readLong());
+                tMsg.setSeq(_byte_process_msg.readLong());
+                tMsg.getData().write(_byte_process_msg, _byte_process_msg.readPosition(), _byte_process_msg.readRemaining());
+
+                _processOneMsg(tMsg);
+
+                _byte_process_msg.clear();
+            } else if (event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.MULTI_MSG) {
                 // có thể có nhiều msg
 
+                _byte_process_msg.write(event.getData());
+
                 // đọc cho tới khi nào hết data thì thôi
-                while (event.getData().readRemaining() > 0) {
-                    _processOneMsg(event.getData(), false);
+                // Cấu trúc: ["độ dài data 1"]["source native index 1"]["seq in queue 1"]["data 1"]["độ dài data 2"]["source native index 2"]["seq in queue 2"]["data 2"]
+                while (_byte_process_msg.readRemaining() > 0) {
+                    TranspotMsg tMsg = _transpot_msg_pool.pop();
+
+                    int dataLen = _byte_process_msg.readInt();
+                    tMsg.getQueueData().write(_byte_process_msg, _byte_process_msg.readPosition(), 8 + 8 + dataLen);    // đọc nhưng ko ảnh hưởng readPosition trong _byte_process_msg
+                    tMsg.setSrcIndex(_byte_process_msg.readLong());
+                    tMsg.setSeq(_byte_process_msg.readLong());
+                    _byte_process_msg.read(tMsg.getData(), dataLen);
+
+                    _processOneMsg(tMsg);
                 }
-            } else if (event.getType() == Constance.SINKIN.PROCESSS_MSG_TYPE.CHECK_MISS) {
-                /*
-                 * nếu hàng chờ còn msg và nó đã chờ quá lâu --> lấy các msg miss ở giữa
-                 * nếu ko có msg chờ thì bỏ qua
-                 */
+
+                _byte_process_msg.clear();
+            } else if (event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.CHECK_MISS) {
+                // nếu hàng chờ còn msg và nó đã chờ quá lâu --> lấy các msg miss ở giữa
+                // nếu ko có msg chờ thì bỏ qua
                 if (!_msg_wait.isEmpty()) {
                     TranspotMsg tMsg = _msg_wait.firstEntry().getValue();
                     if (tMsg.getRcvTime() + _cfg.getMaxTimeWaitMS() < System.currentTimeMillis()) {
@@ -402,61 +420,53 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
             }
 
             // check xem trong hàng đợi có msg kế tiếp không ?
-            if (event.getType() == Constance.SINKIN.PROCESSS_MSG_TYPE.MSG || event.getType() == Constance.SINKIN.PROCESSS_MSG_TYPE.MULTI_MSG) {
+            if (event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.MSG || event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.MULTI_MSG) {
                 while (!_msg_wait.isEmpty() && _msg_wait.firstKey() <= _seq_in_queue + 1) {
                     long firstKey = _msg_wait.firstKey();
                     TranspotMsg tMsg = _msg_wait.remove(firstKey);      // lấy msg chờ và xóa khỏi hàng chờ
                     if (firstKey == _seq_in_queue + 1) {
                         _seq_in_queue++;
                         _src_latest_index = tMsg.getSrcIndex();
-                        _appender.writeBytes(tMsg.toBytes());                           // ghi vào queue
+                        _appender.writeBytes(tMsg.getQueueData());                           // ghi vào queue
                     }
-                    _returnTranspotMsg(tMsg);                                       // trả lại về object pool
+
+                    // clear data và trả về pool
+                    tMsg.clear();
+                    _transpot_msg_pool.push(tMsg);
                 }
             }
         } catch (Exception ex) {
-            LOGGER.error("Sinkin OnMsg error, msg {}", event.toString(), ex);
+            log.error("Sinkin OnMsg error", ex);
         }
     }
 
 
-    /**
-     * @param bytes   dữ liệu được bên source gửi về. Có thể chứa 1 hoặc nhiều bản ghi liên tiếp
-     * @param onlyOne nếu dữ liệu trong 'bytes' chỉ có 1 bản ghi --> 'allData' chính là 'bytes' luôn
-     */
-    private void _processOneMsg(Bytes<ByteBuffer> bytes, boolean onlyOne) {
+    // xử lý 1 msg hoàn chỉnh
+    private void _processOneMsg(TranspotMsg tMsg) {
         try {
-            // lấy từ object pool
-            TranspotMsg tMsg = _getTranspotMsg();
-
-            // deserialize data
-            tMsg.clear();
-            tMsg.setVersion(bytes.readByte());
-            bytes.read(tMsg.getData(), bytes.readInt());
-            tMsg.setSeq(bytes.readLong());
-            tMsg.setSrcIndex(bytes.readLong());
-            if (onlyOne) {
-                tMsg.getAllData().write(bytes, 0, bytes.writePosition());
-            }
-
             if (tMsg.getSeq() <= _seq_in_queue) {
                 // msg đã xử lý thì bỏ qua
-                // trả lại cho object pool
-                _returnTranspotMsg(tMsg);
+                // trả về pool
+                tMsg.clear();
+                _transpot_msg_pool.push(tMsg);
             } else if (tMsg.getSeq() == _seq_in_queue + 1) {
                 // nếu là msg tiếp theo --> ghi vào trong queue
                 _seq_in_queue++;
                 _src_latest_index = tMsg.getSrcIndex();
-                _appender.writeBytes(tMsg.toBytes());
-                // trả lại cho object pool
-                _returnTranspotMsg(tMsg);
+                _appender.writeBytes(tMsg.getQueueData());
+                // trả về pool
+                tMsg.clear();
+                _transpot_msg_pool.push(tMsg);
             } else {
                 // msg lớn hơn "current + 1" thì đẩy vào trong hệ thống chờ kèm thời gian
                 tMsg.setRcvTime(System.currentTimeMillis());
                 _msg_wait.put(tMsg.getSeq(), tMsg);
             }
         } catch (Exception ex) {
-            LOGGER.error("Sinkin ProcessOneMsg error, onlyOne {}, bytes {}", onlyOne, Arrays.toString(bytes.toByteArray()), ex);
+            // trả về pool
+            tMsg.clear();
+            _transpot_msg_pool.push(tMsg);
+            log.error("Sinkin ProcessOneMsg error", ex);
         }
     }
 
@@ -475,6 +485,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
 
                 _byte_miss_msg.writeByte(Constance.FANOUT.CONFIRM.LATEST_MSG);
 
+
                 // gửi đi
                 isSuccess = _zSocket.send(_byte_miss_msg.toByteArray());
                 _byte_miss_msg.clear();
@@ -482,26 +493,19 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
                 if (!isSuccess) {
                     // ko gửi được msg
 
-                    LOGGER.error("Get latest msg fail. Maybe TIMEOUT !");
+                    log.error("Get latest msg fail. Maybe TIMEOUT !");
                 } else {
-                    // nhận về
-                    _byte_miss_msg_raw = _zSocket.recv();
-                    if (_byte_miss_msg_raw == null) {
-                        LOGGER.error("Rep latest msg empty. Maybe TIMEOUT !");
+                    // gửi thành công và nhận về
+                    byte[] resData = _zSocket.recv();
+
+                    if (resData == null) {
+                        log.error("Rep latest msg empty. Maybe TIMEOUT !");
                         isSuccess = false;
-                    } else if (_byte_miss_msg_raw.length > 0) {
-                        _byte_miss_msg.write(_byte_miss_msg_raw);
+                    } else if (resData.length > 0) {
                         _ring_buffer_process_msg.publishEvent(
-                                (newEvent, sequence, __type, __bytesParam) -> {
-                                    newEvent.clear();
-                                    newEvent.setType(__type);
-                                    __bytesParam.read(newEvent.getData());
-                                },
-                                Constance.SINKIN.PROCESSS_MSG_TYPE.MSG,
-                                _byte_miss_msg);
+                                (newEvent, sequence, __bytesData) -> newEvent.setType(__bytesData[0]).setData(__bytesData),
+                                resData);
                     }
-                    // clear msg
-                    _byte_miss_msg.clear();
                 }
             } else if (msg.getType() == Constance.FANOUT.CONFIRM.FROM_TO) {
                 // nếu lấy các bản ghi from-to index
@@ -516,32 +520,24 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
 
                 if (!isSuccess) {
                     // ko gửi được msg
-                    LOGGER.error(MessageFormat.format("Get items from {0} - to {1} fail. Maybe TIMEOUT !", msg.getIndexFrom(), msg.getIndexTo()));
+                    log.error(MessageFormat.format("Get items from {0} - to {1} fail. Maybe TIMEOUT !", msg.getIndexFrom(), msg.getIndexTo()));
                 } else {
                     // nhận về
-                    _byte_miss_msg_raw = _zSocket.recv();
-                    if (_byte_miss_msg_raw == null) {
-                        LOGGER.error(MessageFormat.format("Rep items from {0} - to {1} fail. Maybe TIMEOUT !", msg.getIndexFrom(), msg.getIndexTo()));
+                    byte[] resData = _zSocket.recv();
+                    if (resData == null) {
+                        log.error(MessageFormat.format("Rep items from {0} - to {1} fail. Maybe TIMEOUT !", msg.getIndexFrom(), msg.getIndexTo()));
                         isSuccess = false;
-                    } else if (_byte_miss_msg_raw.length > 0) {
-                        _byte_miss_msg.write(_byte_miss_msg_raw);
+                    } else if (resData.length > 0) {
                         _ring_buffer_process_msg.publishEvent(
-                                (newEvent, sequence, __type, __bytesParam) -> {
-                                    newEvent.clear();
-                                    newEvent.setType(__type);
-                                    __bytesParam.read(newEvent.getData());
-                                },
-                                Constance.SINKIN.PROCESSS_MSG_TYPE.MULTI_MSG,
-                                _byte_miss_msg);
+                                (newEvent, sequence, __type, __bytesData) -> newEvent.setType(__type).setData(__bytesData),
+                                Constance.SINKIN.PROCESS_MSG_TYPE.MULTI_MSG, resData);
                     }
-                    // clear msg
-                    _byte_miss_msg.clear();
                 }
             }
 
             return isSuccess;
         } catch (Exception ex) {
-            LOGGER.error("Sinkin OnMissMsgReq error, msg {}", msg.toString(), ex);
+            log.error("Sinkin OnMissMsgReq error, msg {}", msg.toString(), ex);
             return false;
         }
     }
@@ -551,35 +547,27 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
      * lấy index của item cuối cùng trong queue
      * mục đích là để xác định vị trí cuối cùng đã đồng bộ từ Source từ đó tiếp tục đồng bộ
      */
-    private long _getLatestIndex() {
+    private LongLongObject _getLatestInfo() {
         try {
             if (_queue.lastIndex() >= 0) {
                 Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
-
-                TranspotMsg latestItem = _getTranspotMsg(); // lấy 1 đối tượng từ pool
 
                 ExcerptTailer tailer = _queue.createTailer();
                 tailer.moveToIndex(_queue.lastIndex());
                 tailer.readBytes(bytes);
 
-                latestItem.clear();
-                latestItem.setVersion(bytes.readByte());
-                bytes.read(latestItem.getData(), bytes.readInt());
-                latestItem.setSeq(bytes.readLong());
-                latestItem.setSrcIndex(bytes.readLong());
+                long index = bytes.readLong();
+                long seq = bytes.readLong();
 
-                bytes.release(_ref_id);
-                tailer.close();
+                bytes.releaseLast();
 
-                _returnTranspotMsg(latestItem); // trả lại đối tượng cho pool
-
-                return latestItem.getSrcIndex();
+                return new LongLongObject(index, seq);
             } else {
-                return -1;
+                return null;
             }
         } catch (Exception ex) {
-            LOGGER.error("Sinkin GetLatestIndex error", ex);
-            return -1;
+            log.error("Sinkin GetLatestIndex error", ex);
+            return null;
         }
     }
 
@@ -593,74 +581,36 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         // di chuyển tới cuối
         tailer.toEnd();
 
-        Bytes<ByteBuffer> byte_read = Bytes.elasticByteBuffer();
-        Bytes<ByteBuffer> byte_msg_data = Bytes.elasticByteBuffer();
-        Wire wire_msg_data = WireType.BINARY.apply(byte_msg_data);
-
-        byte version;
-        long seq;
-        T objT = _eventFactory();
-        long id;    // đưa ra cho người dùng bên ngoài đổi từ "index" sang "id"
+        Bytes<ByteBuffer> bytesRead = Bytes.elasticByteBuffer();
+        Bytes<ByteBuffer> bytesData = Bytes.elasticByteBuffer();
 
         Runnable waiter = OmniWaitStrategy.getWaiter(_cfg.getQueueWaitStrategy());
 
-        try {
-            while (_status.get() == RUNNING || _status.get() == SYNCING) {
-                if (tailer.readBytes(byte_read)) {
-                    version = byte_read.readByte();   // version
-                    byte_read.read(byte_msg_data, byte_read.readInt()); // data
-                    seq = byte_read.readLong();     // seq
-                    id = byte_read.readLong();     // index
+        while (_status.get() == RUNNING || _status.get() == SYNCING) {
+            try {
+                if (tailer.readBytes(bytesRead)) {
+                    bytesRead.readSkip(8);      // bỏ qua src index
+                    long seq = bytesRead.readLong();
+                    bytesRead.read(bytesData, (int) bytesRead.readRemaining()); // data
 
-                    objT.readMarshallable(wire_msg_data);
+                    _handler.apply(tailer.lastReadIndex(), seq, bytesData);
 
-                    _handler.apply(version, objT, seq, id);
-
-                    byte_read.clear();
-                    wire_msg_data.clear();
-                    byte_msg_data.clear();
+                    bytesRead.clear();
+                    bytesData.clear();
                 } else {
                     waiter.run();
                 }
+            } catch (Exception ex) {
+                log.error("Sinkin OnWriteQueue error", ex);
             }
-        } catch (Exception ex) {
-            LOGGER.error("Sinkin OnWriteQueue error", ex);
-        } finally {
-            byte_read.release(_ref_id);
-            byte_msg_data.release(_ref_id);
-            tailer.close();
-
-            LOGGER.info("Sinkin subscribe write queue closed");
         }
+
+        bytesRead.releaseLast();
+        bytesData.releaseLast();
+        tailer.close();
+
+        log.info("Sinkin subscribe write queue closed");
     }
-
-
-    // Tạo một instance mới của class được chỉ định
-    private T _eventFactory() {
-        try {
-            return _dataType.newInstance();
-        } catch (Exception ex) {
-            LOGGER.error("Sinkin EventFactory error", ex);
-            return null;
-        }
-    }
-
-
-    //region OBJECT POOL
-    // lấy đối tượng từ pool
-    private TranspotMsg _getTranspotMsg() {
-        try {
-            return _object_pool.pop();
-        } catch (Exception ex) {
-            return new TranspotMsg();
-        }
-    }
-
-    // trả lại đối tượng về cho pool
-    private void _returnTranspotMsg(TranspotMsg msg) {
-        _object_pool.push(msg);
-    }
-    //endregion
 
 
     /**
@@ -668,7 +618,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
      * các công việc đang làm dở sẽ làm nốt cho xong
      */
     private void _onShutdown() {
-        LOGGER.info("Sinkin closing...");
+        log.info("Sinkin closing...");
 
         _status.set(STOP);
         LockSupport.parkNanos(500_000_000);
@@ -677,7 +627,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         _zmq_context.destroy();
 
         // turnoff miss check processor, ngừng việc lấy các msg thiếu và msg mới nhất
-        _extor_check_msg.shutdownNow();
+        _execs_check_msg.shutdownNow();
         _miss_check_processor.halt();
         _disruptor_miss_msg.shutdown();
 
@@ -691,10 +641,10 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
         _queue.close();
 
         // object pool
-        _object_pool.clear();
+        _transpot_msg_pool.clear();
 
         // byte
-        _byte_miss_msg.release(_ref_id);
+        _byte_miss_msg.releaseLast();
 
         // giải phóng các CPU core / Logical processor đã sử dụng
         for (AffinityCompose affinityCompose : _affinity_composes) {
@@ -703,7 +653,7 @@ public class Sinkin<T extends SelfDescribingMarshallable> {
 
         LockSupport.parkNanos(500_000_000);
 
-        LOGGER.info("Sinkin CLOSED !");
+        log.info("Sinkin CLOSED !");
     }
 
 

@@ -4,10 +4,16 @@ import com.lmax.disruptor.BlockingWaitStrategy;
 import com.lmax.disruptor.WaitStrategy;
 import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.OmniWaitStrategy;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.experimental.Accessors;
 import net.openhft.chronicle.queue.rollcycles.LargeRollCycles;
 
 import java.text.MessageFormat;
 
+@Getter
+@Setter
+@Accessors(chain = true)
 public class SinkinCfg {
 
     // folder chứa data của queue
@@ -136,213 +142,6 @@ public class SinkinCfg {
         return config;
     }
 
-    public OmniWaitStrategy getQueueWaitStrategy() {
-        return queueWaitStrategy;
-    }
-
-    public SinkinCfg setQueueWaitStrategy(OmniWaitStrategy queueWaitStrategy) {
-        this.queueWaitStrategy = queueWaitStrategy;
-        return this;
-    }
-
-    public Integer getSubMsgCpu() {
-        return subMsgCpu;
-    }
-
-    public SinkinCfg setSubMsgCpu(Integer subMsgCpu) {
-        this.subMsgCpu = subMsgCpu;
-        return this;
-    }
-
-    public Boolean getEnableSubMsgBindingCore() {
-        return enableSubMsgBindingCore;
-    }
-
-    public SinkinCfg setEnableSubMsgBindingCore(Boolean enableSubMsgBindingCore) {
-        this.enableSubMsgBindingCore = enableSubMsgBindingCore;
-        return this;
-    }
-
-
-    public Integer getCheckMissMsgAndSubQueueCpu() {
-        return checkMissMsgAndSubQueueCpu;
-    }
-
-    public SinkinCfg setCheckMissMsgAndSubQueueCpu(Integer checkMissMsgAndSubQueueCpu) {
-        this.checkMissMsgAndSubQueueCpu = checkMissMsgAndSubQueueCpu;
-        return this;
-    }
-
-    public Boolean getEnableCheckMissMsgAndSubQueueBindingCore() {
-        return enableCheckMissMsgAndSubQueueBindingCore;
-    }
-
-    public SinkinCfg setEnableCheckMissMsgAndSubQueueBindingCore(Boolean enableCheckMissMsgAndSubQueueBindingCore) {
-        this.enableCheckMissMsgAndSubQueueBindingCore = enableCheckMissMsgAndSubQueueBindingCore;
-        return this;
-    }
-
-    public Integer getDisruptorProcessMsgCpu() {
-        return disruptorProcessMsgCpu;
-    }
-
-    public SinkinCfg setDisruptorProcessMsgCpu(Integer disruptorProcessMsgCpu) {
-        this.disruptorProcessMsgCpu = disruptorProcessMsgCpu;
-        return this;
-    }
-
-    public Boolean getEnableDisruptorProcessMsgBindingCore() {
-        return enableDisruptorProcessMsgBindingCore;
-    }
-
-    public SinkinCfg setEnableDisruptorProcessMsgBindingCore(Boolean enableDisruptorProcessMsgBindingCore) {
-        this.enableDisruptorProcessMsgBindingCore = enableDisruptorProcessMsgBindingCore;
-        return this;
-    }
-
-    public Integer getCpu() {
-        return cpu;
-    }
-
-    public SinkinCfg setCpu(Integer cpu) {
-        this.cpu = cpu;
-        return this;
-    }
-
-    public Boolean getEnableBindingCore() {
-        return enableBindingCore;
-    }
-
-    public SinkinCfg setEnableBindingCore(Boolean enableBindingCore) {
-        this.enableBindingCore = enableBindingCore;
-        return this;
-    }
-
-    public LargeRollCycles getRollCycles() {
-        return rollCycles;
-    }
-
-    public SinkinCfg setRollCycles(LargeRollCycles rollCycles) {
-        this.rollCycles = rollCycles;
-        return this;
-    }
-
-    public Integer getRingBufferSize() {
-        return ringBufferSize;
-    }
-
-    public SinkinCfg setRingBufferSize(Integer ringBufferSize) {
-        this.ringBufferSize = ringBufferSize;
-        return this;
-    }
-
-    public WaitStrategy getWaitStrategy() {
-        return waitStrategy;
-    }
-
-    public SinkinCfg setWaitStrategy(WaitStrategy waitStrategy) {
-        this.waitStrategy = waitStrategy;
-        return this;
-    }
-
-    public Integer getTimeoutRecvReqMissMsg() {
-        return timeoutRecvReqMissMsg;
-    }
-
-    public SinkinCfg setTimeoutRecvReqMissMsg(Integer timeoutRecvReqMissMsg) {
-        this.timeoutRecvReqMissMsg = timeoutRecvReqMissMsg;
-        return this;
-    }
-
-    public Integer getTimeoutSendReqMissMsg() {
-        return timeoutSendReqMissMsg;
-    }
-
-    public SinkinCfg setTimeoutSendReqMissMsg(Integer timeoutSendReqMissMsg) {
-        this.timeoutSendReqMissMsg = timeoutSendReqMissMsg;
-        return this;
-    }
-
-    public Integer getTimeRateGetMissMsgMS() {
-        return timeRateGetMissMsgMS;
-    }
-
-    public SinkinCfg setTimeRateGetMissMsgMS(Integer timeRateGetMissMsgMS) {
-        this.timeRateGetMissMsgMS = timeRateGetMissMsgMS;
-        return this;
-    }
-
-    public Integer getTimeRateGetLatestMsgMS() {
-        return timeRateGetLatestMsgMS;
-    }
-
-    public SinkinCfg setTimeRateGetLatestMsgMS(Integer timeRateGetLatestMsgMS) {
-        this.timeRateGetLatestMsgMS = timeRateGetLatestMsgMS;
-        return this;
-    }
-
-    public Integer getZmqSubBufferSize() {
-        return zmqSubBufferSize;
-    }
-
-    public SinkinCfg setZmqSubBufferSize(Integer zmqSubBufferSize) {
-        this.zmqSubBufferSize = zmqSubBufferSize;
-        return this;
-    }
-
-    public Integer getMaxObjectsPoolWait() {
-        return maxObjectsPoolWait;
-    }
-
-    public SinkinCfg setMaxObjectsPoolWait(Integer maxObjectsPoolWait) {
-        this.maxObjectsPoolWait = maxObjectsPoolWait;
-        return this;
-    }
-
-    public Integer getMaxTimeWaitMS() {
-        return maxTimeWaitMS;
-    }
-
-    public SinkinCfg setMaxTimeWaitMS(Integer maxTimeWaitMS) {
-        this.maxTimeWaitMS = maxTimeWaitMS;
-        return this;
-    }
-
-    public String getQueuePath() {
-        return queuePath;
-    }
-
-    public SinkinCfg setQueuePath(String queuePath) {
-        this.queuePath = queuePath;
-        return this;
-    }
-
-    public Integer getRealtimePort() {
-        return realtimePort;
-    }
-
-    public SinkinCfg setRealtimePort(Integer realtimePort) {
-        this.realtimePort = realtimePort;
-        return this;
-    }
-
-    public Integer getConfirmPort() {
-        return confirmPort;
-    }
-
-    public SinkinCfg setConfirmPort(Integer confirmPort) {
-        this.confirmPort = confirmPort;
-        return this;
-    }
-
-    public String getSourceIP() {
-        return sourceIP;
-    }
-
-    public SinkinCfg setSourceIP(String sourceIP) {
-        this.sourceIP = sourceIP;
-        return this;
-    }
 
     public String getRealTimeUrl() {
         return MessageFormat.format("tcp://{0}:{1}", sourceIP, realtimePort + "");

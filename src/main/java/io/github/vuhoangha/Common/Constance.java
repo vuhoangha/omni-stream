@@ -21,7 +21,7 @@ public class Constance {
 
     public static class SINKIN {
         // các loại data đầu vào cho quá trình xử lý chính
-        public static class PROCESSS_MSG_TYPE {
+        public static class PROCESS_MSG_TYPE {
             public static byte MSG = FANOUT.PUB_TOPIC.MSG;                      // xử lý msg queue mới
             public static byte HEART_BEAT = FANOUT.PUB_TOPIC.HEART_BEAT;        // msg heartbeat để kiểm tra connect giữa sink và src còn hoạt động ko
             public static byte CHECK_MISS = 3;                                  // kiểm tra xem có msg nào miss trong hàng chờ ko

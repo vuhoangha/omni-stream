@@ -1,11 +1,15 @@
 package io.github.vuhoangha.OneToMany;
 
-import com.lmax.disruptor.WaitStrategy;
-import com.lmax.disruptor.YieldingWaitStrategy;
 import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.OmniWaitStrategy;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.experimental.Accessors;
 import net.openhft.chronicle.queue.rollcycles.LargeRollCycles;
 
+@Getter
+@Setter
+@Accessors(chain = true)
 public class FanoutCfg {
 
     // đường dẫn tới folder chứa dữ liệu
@@ -20,12 +24,6 @@ public class FanoutCfg {
     // số lượng msg tối đa gửi "src" --> "sink" trong 1 lần lấy các msg miss
     private Integer numberMsgInBatch;
 
-    // kiểu WaitStrategy được sử dụng để gom msg từ nhiều thread ghi vào queue
-    private WaitStrategy disruptorWaitStrategy;
-
-    // kích cỡ ring buffer của disruptor gửi/nhận msg. Phải là dạng 2^n
-    private Integer ringBufferSize;
-
     // kiểu WaitStrategy được sử dụng lắng nghe các message được ghi vào queue
     private OmniWaitStrategy queueWaitStrategy;
 
@@ -36,11 +34,6 @@ public class FanoutCfg {
      */
     private Integer maxNumberMsgInCachePub;
 
-    /*
-     * version (-128 --> 127)
-     * phiên bản của tin nhắn
-     */
-    private Byte version;
 
     /*
      * thời gian định kỳ đóng file cũ, tạo file mới trong queue
@@ -97,191 +90,23 @@ public class FanoutCfg {
     private FanoutCfg() {
     }
 
-    public static FanoutCfg builder() {
+    public static FanoutCfg defaultCfg() {
         FanoutCfg cfg = new FanoutCfg();
 
         // assign default value
         cfg.setRealtimePort(5555);
         cfg.setConfirmPort(5556);
-        cfg.setNumberMsgInBatch(10000);
+        cfg.setNumberMsgInBatch(20000);
         cfg.setMaxNumberMsgInCachePub(1000000);
-        cfg.setVersion((byte) -128);
-        cfg.setDisruptorWaitStrategy(new YieldingWaitStrategy());
-        cfg.setRingBufferSize(2 << 16);     // 131072
         cfg.setRollCycles(LargeRollCycles.LARGE_DAILY);
         cfg.setQueueWaitStrategy(OmniWaitStrategy.YIELD);
         cfg.setEnableBindingCore(false);
         cfg.setCpu(Constance.CPU_TYPE.ANY);
-        cfg.setEnableDisruptorBindingCore(false);
-        cfg.setDisruptorCpu(Constance.CPU_TYPE.NONE);
         cfg.setEnableQueueBindingCore(false);
         cfg.setQueueCpu(Constance.CPU_TYPE.NONE);
         cfg.setEnableHandleConfirmBindingCore(false);
         cfg.setHandleConfirmCpu(Constance.CPU_TYPE.NONE);
 
         return cfg;
-    }
-
-
-    public Boolean getEnableHandleConfirmBindingCore() {
-        return enableHandleConfirmBindingCore;
-    }
-
-    public FanoutCfg setEnableHandleConfirmBindingCore(Boolean enableHandleConfirmBindingCore) {
-        this.enableHandleConfirmBindingCore = enableHandleConfirmBindingCore;
-        return this;
-    }
-
-    public Integer getHandleConfirmCpu() {
-        return handleConfirmCpu;
-    }
-
-    public FanoutCfg setHandleConfirmCpu(Integer handleConfirmCpu) {
-        this.handleConfirmCpu = handleConfirmCpu;
-        return this;
-    }
-
-    public Boolean getEnableQueueBindingCore() {
-        return enableQueueBindingCore;
-    }
-
-    public FanoutCfg setEnableQueueBindingCore(Boolean enableQueueBindingCore) {
-        this.enableQueueBindingCore = enableQueueBindingCore;
-        return this;
-    }
-
-    public Integer getQueueCpu() {
-        return queueCpu;
-    }
-
-    public FanoutCfg setQueueCpu(Integer queueCpu) {
-        this.queueCpu = queueCpu;
-        return this;
-    }
-
-    public Integer getCpu() {
-        return cpu;
-    }
-
-    public FanoutCfg setCpu(Integer cpu) {
-        this.cpu = cpu;
-        return this;
-    }
-
-    public Boolean getEnableBindingCore() {
-        return enableBindingCore;
-    }
-
-    public FanoutCfg setEnableBindingCore(Boolean enableBindingCore) {
-        this.enableBindingCore = enableBindingCore;
-        return this;
-    }
-
-    public Boolean getEnableDisruptorBindingCore() {
-        return enableDisruptorBindingCore;
-    }
-
-    public FanoutCfg setEnableDisruptorBindingCore(Boolean enableDisruptorBindingCore) {
-        this.enableDisruptorBindingCore = enableDisruptorBindingCore;
-        return this;
-    }
-
-    public Integer getDisruptorCpu() {
-        return disruptorCpu;
-    }
-
-    public FanoutCfg setDisruptorCpu(Integer disruptorCpu) {
-        this.disruptorCpu = disruptorCpu;
-        return this;
-    }
-
-    public LargeRollCycles getRollCycles() {
-        return rollCycles;
-    }
-
-    public FanoutCfg setRollCycles(LargeRollCycles rollCycles) {
-        this.rollCycles = rollCycles;
-        return this;
-    }
-
-    public Integer getRingBufferSize() {
-        return ringBufferSize;
-    }
-
-    public FanoutCfg setRingBufferSize(Integer ringBufferSize) {
-        this.ringBufferSize = ringBufferSize;
-        return this;
-    }
-
-    public WaitStrategy getDisruptorWaitStrategy() {
-        return disruptorWaitStrategy;
-    }
-
-    public FanoutCfg setDisruptorWaitStrategy(WaitStrategy disruptorWaitStrategy) {
-        this.disruptorWaitStrategy = disruptorWaitStrategy;
-        return this;
-    }
-
-    public OmniWaitStrategy getQueueWaitStrategy() {
-        return queueWaitStrategy;
-    }
-
-    public FanoutCfg setQueueWaitStrategy(OmniWaitStrategy queueWaitStrategy) {
-        this.queueWaitStrategy = queueWaitStrategy;
-        return this;
-    }
-
-    public String getQueuePath() {
-        return queuePath;
-    }
-
-    public FanoutCfg setQueuePath(String queuePath) {
-        this.queuePath = queuePath;
-        return this;
-    }
-
-    public Integer getRealtimePort() {
-        return realtimePort;
-    }
-
-    public FanoutCfg setRealtimePort(Integer realtimePort) {
-        this.realtimePort = realtimePort;
-        return this;
-    }
-
-    public Integer getConfirmPort() {
-        return confirmPort;
-    }
-
-    public FanoutCfg setConfirmPort(Integer confirmPort) {
-        this.confirmPort = confirmPort;
-        return this;
-    }
-
-    public Integer getNumberMsgInBatch() {
-        return numberMsgInBatch;
-    }
-
-    public FanoutCfg setNumberMsgInBatch(Integer numberMsgInBatch) {
-        this.numberMsgInBatch = numberMsgInBatch;
-        return this;
-    }
-
-    public Integer getMaxNumberMsgInCachePub() {
-        return maxNumberMsgInCachePub;
-    }
-
-    public FanoutCfg setMaxNumberMsgInCachePub(Integer maxNumberMsgInCachePub) {
-        this.maxNumberMsgInCachePub = maxNumberMsgInCachePub;
-        return this;
-    }
-
-    public Byte getVersion() {
-        return version;
-    }
-
-    public FanoutCfg setVersion(Byte version) {
-        this.version = version;
-        return this;
     }
 }

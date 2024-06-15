@@ -1,23 +1,18 @@
 package io.github.vuhoangha.OneToMany;
 
-import com.lmax.disruptor.RingBuffer;
-import com.lmax.disruptor.dsl.Disruptor;
-import com.lmax.disruptor.dsl.ProducerType;
 import io.github.vuhoangha.Common.AffinityCompose;
 import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.OmniWaitStrategy;
 import io.github.vuhoangha.Common.Utils;
+import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
-import net.openhft.chronicle.core.io.ReferenceOwner;
 import net.openhft.chronicle.queue.ExcerptAppender;
 import net.openhft.chronicle.queue.ExcerptTailer;
 import net.openhft.chronicle.queue.TailerDirection;
 import net.openhft.chronicle.queue.impl.single.SingleChronicleQueue;
 import net.openhft.chronicle.queue.impl.single.SingleChronicleQueueBuilder;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
@@ -26,10 +21,10 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 
+@Slf4j
 public class Fanout {
 
     // quản lý trạng thái
@@ -39,14 +34,10 @@ public class Fanout {
     // tổng số item trong queue
     private long _seq_in_queue;
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(Fanout.class);
-    private final ReferenceOwner _ref_id = ReferenceOwner.temporary("Fanout");
     private FanoutCfg _cfg;
     private SingleChronicleQueue _queue;
     private ExcerptAppender _appender;
-    Bytes<ByteBuffer> _byte_disruptor = Bytes.elasticByteBuffer();
-    private Disruptor<Bytes<ByteBuffer>> _disruptor;
-    private RingBuffer<Bytes<ByteBuffer>> _ring_buffer;
+    Bytes<ByteBuffer> _byte_in = Bytes.elasticByteBuffer();
     private ZContext _zmq_context;
     List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
 
@@ -70,7 +61,7 @@ public class Fanout {
 
 
     private void _initMainFlow() {
-        LOGGER.info("Fanout run main flow on logical processor {}", Affinity.getCpu());
+        log.info("Fanout run main flow on logical processor {}", Affinity.getCpu());
 
         // khởi tạo queue
         _affinity_composes.add(Utils.runWithThreadAffinity(
@@ -81,16 +72,6 @@ public class Fanout {
                 _cfg.getEnableQueueBindingCore(),
                 _cfg.getQueueCpu(),
                 this::_initQueueCore));
-
-        // khởi tạo disruptor
-        _affinity_composes.add(Utils.runWithThreadAffinity(
-                "Fanout Disruptor",
-                false,
-                _cfg.getEnableBindingCore(),
-                _cfg.getCpu(),
-                _cfg.getEnableDisruptorBindingCore(),
-                _cfg.getDisruptorCpu(),
-                this::_initDisruptorCore));
 
         // lắng nghe khi 1 sink req loss msg
         _affinity_composes.add(Utils.runWithThreadAffinity(
@@ -114,22 +95,8 @@ public class Fanout {
                 .build();
         _appender = _queue.acquireAppender();
         _seq_in_queue = _queue.entryCount();
+
         new Thread(() -> _onWriteQueue(_queue.createTailer())).start();
-    }
-
-
-    private void _initDisruptorCore() {
-        LOGGER.info("Fanout run disruptor on logical processor {}", Affinity.getCpu());
-
-        _disruptor = new Disruptor<>(
-                Bytes::elasticByteBuffer,
-                _cfg.getRingBufferSize(),
-                Executors.newSingleThreadExecutor(),
-                ProducerType.SINGLE,
-                _cfg.getDisruptorWaitStrategy());
-        _disruptor.handleEventsWith((event, sequence, endOfBatch) -> this._onWriteDisruptor(event));
-        _disruptor.start();
-        _ring_buffer = _disruptor.getRingBuffer();
     }
 
 
@@ -140,58 +107,61 @@ public class Fanout {
      * "queue index to": là index msg đứng sau msg muốn lấy
      * ví dụ có [1,2,3,4,5,6], tôi muốn lấy [3,4,5] thì cần gửi "queue index from": 2, "queue index to": 6
      * dữ liệu ở đây sẽ được trả theo 2 kiểu tùy TYPE
-     * kiểu 1 cho "LATEST_MSG": ["version 1"]["độ dài data 1"]["data 1"]["seq in queue 1"]["source native index 1"]
-     * kiểu 2 cho các loại còn lại: ["version 1"]["độ dài data 1"]["data 1"]["seq in queue 1"]["source native index 1"]["version 2"]["độ dài data 2"]["data 2"]["seq in queue 2"]["source native index 2"]
+     * kiểu 1 cho "LATEST_MSG": ["msg type"]["source native index 1"]["seq in queue 1"]["data 1"]
+     * kiểu 2 cho các loại còn lại: ["độ dài data 1"]["source native index 1"]["seq in queue 1"]["data 1"]["độ dài data 2"]["source native index 2"]["seq in queue 2"]["data 2"]
      */
     private void _initHandlerConfirm() {
-        LOGGER.info("Fanout run handle confirm on logical processor {}", Affinity.getCpu());
+        log.info("Fanout run handle confirm on logical processor {}", Affinity.getCpu());
 
         ZMQ.Socket repSocket = _zmq_context.createSocket(SocketType.REP);
         repSocket.bind("tcp://*:" + _cfg.getConfirmPort());
 
         long defaultIndexTo = -1;
         long defaultNextReadIndex = -2;
-        byte type = -1;
-        long indexFrom = -1;
-        long indexTo = defaultIndexTo;
         long nextReadIndex = defaultNextReadIndex;        // index msg đọc tiếp theo. Nhớ là giá trị mặc định của 'nextReadIndex' phải khác 'indexTo'
-        int count = 0;                                    // số lượng msg đã đọc
         boolean moveToIndexSuccess = false;
-        byte[] request;
 
-        Bytes<ByteBuffer> byteRead = Bytes.elasticByteBuffer();
-        Bytes<ByteBuffer> byteInput = Bytes.elasticByteBuffer();
+        Bytes<ByteBuffer> byteRead = Bytes.elasticByteBuffer();     // bytes đọc từ queue ra
+        Bytes<ByteBuffer> byteInput = Bytes.elasticByteBuffer();    // bytes nhận được từ zmq
         // cấu trúc ["msg_1"]["msg_2"]...vvv. Client đọc tuần tự từng field từng msg
-        Bytes<ByteBuffer> byteReplies = Bytes.elasticByteBuffer();
+        Bytes<ByteBuffer> byteReplies = Bytes.elasticByteBuffer();  // bytes phản hồi cho người lấy
         byte[] emptyByte = new byte[0];
 
         ExcerptTailer tailer = _queue.createTailer();
 
         try {
             while (_status.get() == RUNNING) {
-                request = repSocket.recv(0);
-                byteInput.write(request);
-                type = byteInput.readByte();
+                byteInput.write(repSocket.recv(0));
+
+                byte type = byteInput.readByte();
 
                 if (type == Constance.FANOUT.CONFIRM.LATEST_MSG) {
+
                     // lấy msg cuối cùng
                     tailer.direction(TailerDirection.BACKWARD).toEnd();
                     if (tailer.readBytes(byteRead)) {
+
                         // vị trí hiện tại có msg
                         long nativeIndex = tailer.lastReadIndex();
-                        byteRead.writeLong(nativeIndex);
-                        repSocket.send(byteRead.toByteArray(), 0);
+                        byteReplies.writeByte(Constance.FANOUT.PUB_TOPIC.MSG);
+                        byteReplies.writeLong(nativeIndex);
+                        byteReplies.write(byteRead);
+
+                        repSocket.send(byteReplies.toByteArray(), 0);
                     } else {
                         // vị trí hiện tại ko có dữ liệu
                         repSocket.send(emptyByte, 0);
                     }
+
                     byteRead.clear();
+                    byteReplies.clear();
                 } else {
+
                     // reset chỉ số
                     nextReadIndex = defaultNextReadIndex;
-                    count = 0;
-                    indexFrom = byteInput.readLong();
-                    indexTo = type == Constance.FANOUT.CONFIRM.FROM_TO
+                    int count = 0;      // số lượng msg đã đọc
+                    long indexFrom = byteInput.readLong();
+                    long indexTo = type == Constance.FANOUT.CONFIRM.FROM_TO
                             ? byteInput.readLong()
                             : defaultIndexTo;
 
@@ -218,12 +188,19 @@ public class Fanout {
                         while (tailer.readBytes(byteRead)        // còn msg trong queue để đọc
                                 && ++count <= _cfg.getNumberMsgInBatch() // số lượng msg đã đọc chưa vượt quá giới hạn
                                 && nextReadIndex != indexTo) {           // chưa chạm tới index_to. Vì trong trường hợp chỉ lấy theo giới hạn, ko có giới hạn index_to thì 2 field này luôn khác nhau rồi
-                            // lấy index của msg tiếp theo
+
+                            // update index của msg tiếp theo
                             nextReadIndex = tailer.index();
-                            // đọc và nối thêm phần native index trong queue
-                            byteRead.writeLong(tailer.lastReadIndex());
-                            // nối msg lẻ này vào list msg tổng có dạng byte[] trả về cho client
+
+                            // độ dài dữ liệu chính trong queue - số byte để chứa sequence
+                            byteReplies.writeInt((int) byteRead.writePosition() - 8);
+
+                            // đọc và nối thêm phần native index vào kết quả trả về
+                            byteReplies.writeLong(tailer.lastReadIndex());
+
+                            // nối phần nội dung msg (bao gồm độ dài data và data thực tế)
                             byteReplies.write(byteRead);
+
                             // clear cho vòng lặp tiếp theo
                             byteRead.clear();
                         }
@@ -239,58 +216,46 @@ public class Fanout {
                 byteInput.clear();
             }
         } catch (Exception ex) {
-            LOGGER.error("Fanout handle confirm request error", ex);
+            log.error("Fanout handle confirm request error", ex);
         } finally {
             tailer.close();
             repSocket.close();
-            byteRead.release(_ref_id);
-            byteInput.release(_ref_id);
-            byteReplies.release(_ref_id);
+            byteRead.releaseLast();
+            byteInput.releaseLast();
+            byteReplies.releaseLast();
 
-            LOGGER.info("Fanout closing listen request confirm");
+            log.info("Fanout closing listen request confirm");
         }
     }
 
 
-    public void write(WriteBytesMarshallable data) {
-//        try {
-//            if (_status.get() == RUNNING)
-//                _ring_buffer.publishEvent((newEvent, sequence, srcEvent) -> {
-//                    srcEvent.writeMarshallable(newEvent);
-//                }, data);
-//        } catch (Exception ex) {
-//            LOGGER.error("Fanout write error, event {}", data.toString(), ex);
-//        }
-
-        data.writeMarshallable(_byte_disruptor);
-        _appender.writeBytes(_byte_disruptor);
-        _byte_disruptor.clear();
-
+    public void write(WriteBytesMarshallable event) {
+        try {
+            _byte_in.writeLong(++_seq_in_queue);
+            event.writeMarshallable(_byte_in);
+            _appender.writeBytes(_byte_in);
+        } catch (Exception ex) {
+            log.error("Fanout write error, event {}", event.toString(), ex);
+        } finally {
+            _byte_in.clear();
+        }
     }
 
-
-    private void _onWriteDisruptor(Bytes<ByteBuffer> event) {
+    public void write(Bytes<?> eventData) {
         try {
-//            if(true)return;
-
-            // cấu trúc item trong queue: ["version"]["độ dài data"]["data"]["seq in queue"]
-//            _byte_disruptor.writeByte(_cfg.getVersion());
-//            _byte_disruptor.writeInt((int) event.writePosition());
-//            _byte_disruptor.write(event);
-//            _byte_disruptor.writeLong(++_seq_in_queue);
-
-            // ghi vào trong Chronicle Queue
-            _appender.writeBytes(event);
+            _byte_in.writeLong(++_seq_in_queue);
+            _byte_in.write(eventData);
+            _appender.writeBytes(_byte_in);
         } catch (Exception ex) {
-            LOGGER.error("Fanout on write disruptor error, event {}", event.toString(), ex);
+            log.error("Fanout write error", ex);
         } finally {
-            event.clear();
+            _byte_in.clear();
         }
     }
 
 
     private void _onWriteQueue(ExcerptTailer tailer) {
-        LOGGER.info("Fanout listen write queue on logical processor {}", Affinity.getCpu());
+        log.info("Fanout listen write queue on logical processor {}", Affinity.getCpu());
 
         /*
          * setHeartbeatIvl: interval gửi heartbeat
@@ -308,16 +273,16 @@ public class Fanout {
         Bytes<ByteBuffer> byteZmqPub = Bytes.elasticByteBuffer();
         Runnable waiter = OmniWaitStrategy.getWaiter(_cfg.getQueueWaitStrategy());
 
-        try {
-            // di chuyển tới bản ghi cuối cùng và lắng nghe các msg kế tiếp
-            tailer.toEnd();
+        // di chuyển tới bản ghi cuối cùng và lắng nghe các msg kế tiếp
+        tailer.toEnd();
 
-            while (_status.get() == RUNNING) {
+        while (_status.get() == RUNNING) {
+            try {
                 if (tailer.readBytes(byteQueueItem)) {
-                    // ["topic"]["version"]["độ dài data"]["data"]["seq in queue"]["source native index"]
+                    // ["topic"]["source native index"]["seq in queue"]["data"]
                     byteZmqPub.writeByte(Constance.FANOUT.PUB_TOPIC.MSG);
-                    byteZmqPub.write(byteQueueItem);
                     byteZmqPub.writeLong(tailer.lastReadIndex());
+                    byteZmqPub.write(byteQueueItem);
 
                     pubSocket.send(byteZmqPub.toByteArray());
 
@@ -326,29 +291,27 @@ public class Fanout {
                 } else {
                     waiter.run();
                 }
+            } catch (Exception ex) {
+                byteQueueItem.clear();
+                byteZmqPub.clear();
+                log.error("Fanout on write queue error", ex);
             }
-        } catch (Exception ex) {
-            LOGGER.error("Fanout on write queue error", ex);
-        } finally {
-            pubSocket.close();
-            tailer.close();
-            byteQueueItem.release(_ref_id);
-            byteZmqPub.release(_ref_id);
-
-            LOGGER.info("Fanout closing subscribe write queue");
         }
+
+        pubSocket.close();
+        tailer.close();
+        byteQueueItem.releaseLast();
+        byteZmqPub.releaseLast();
+
+        log.info("Fanout closing subscribe write queue");
     }
 
 
     public void shutdown() {
-        LOGGER.info("Fanout closing...");
+        log.info("Fanout closing...");
 
         _status.set(STOPPED);
         LockSupport.parkNanos(1_000_000_000);
-
-        // stop --> chờ để xử lý nốt msg
-        _disruptor.shutdown();
-        LockSupport.parkNanos(500_000_000);
 
         // close zeromq. Các socket sẽ được đóng lại cùng
         _zmq_context.destroy();
@@ -357,7 +320,7 @@ public class Fanout {
         _appender.close();
         _queue.close();
 
-        _byte_disruptor.release(_ref_id);
+        _byte_in.releaseLast();
 
         // giải phóng CPU core/Logical processor
         for (AffinityCompose affinityCompose : _affinity_composes)
@@ -365,7 +328,7 @@ public class Fanout {
 
         LockSupport.parkNanos(500_000_000);
 
-        LOGGER.info("Fanout CLOSED !");
+        log.info("Fanout CLOSED !");
     }
 
 }

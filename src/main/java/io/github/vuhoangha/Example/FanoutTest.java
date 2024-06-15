@@ -17,11 +17,7 @@ public class FanoutTest {
 
     public void run() {
         clear();
-        Fanout fanout = new Fanout(FanoutCfg.builder().setQueuePath(sourcePath).setRingBufferSize(2<<10));
-
-
-        // Tạo đối tượng Bytes để chứa dữ liệu binary
-
+        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(sourcePath));
 
         long start = System.currentTimeMillis();
         for (int i = 0; i < 5_000_000; i++) {
@@ -37,7 +33,7 @@ public class FanoutTest {
         System.out.println("Fanout: " + total + " ms");
 
         LockSupport.parkNanos(3_000_000_000L);
-//        fanout.shutdown();
+        fanout.shutdown();
         clear();
     }
 

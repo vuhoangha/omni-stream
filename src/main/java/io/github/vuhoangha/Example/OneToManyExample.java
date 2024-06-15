@@ -1,7 +1,10 @@
 package io.github.vuhoangha.Example;
 
+import io.github.vuhoangha.Common.SinkinHandler;
 import io.github.vuhoangha.OneToMany.*;
+import net.openhft.chronicle.bytes.Bytes;
 
+import java.nio.ByteBuffer;
 import java.util.concurrent.locks.LockSupport;
 
 public class OneToManyExample {
@@ -19,20 +22,14 @@ public class OneToManyExample {
 
 
     public static void runSink() {
-        SinkinHandler<PeopleTest> handler = (byte version, PeopleTest data, long seq, long id) -> {
+        SinkinHandler handler = (long localIndex, long sequence, Bytes<ByteBuffer> data) -> {
             System.out.println("\uD83D\uDCE9Received");
-            System.out.println("Version: " + version);
+            System.out.println("LocalIndex: " + localIndex);
+            System.out.println("Sequence: " + sequence);
             System.out.println("People: " + data.toString());
-            System.out.println("Seq: " + seq);
-            System.out.println("ID: " + id);
         };
 
-        new Sinkin(
-                SinkinCfg.builder()
-                        .setQueuePath(sinkPath)
-                        .setSourceIP("127.0.0.1"),
-                PeopleTest.class,
-                handler);
+        new Sinkin(SinkinCfg.builder().setQueuePath(sinkPath).setSourceIP("127.0.0.1"), handler);
     }
 
 
