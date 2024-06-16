@@ -26,6 +26,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 
+/*
+ * lưu vào queue:
+ *      - compress true: ["src native index"][compress_data(["sequence"]["data"])]
+ *      - compress false: ["src native index"]["sequence"]["data"]
+ */
 @Slf4j
 public class Sinkin {
 
@@ -58,6 +63,7 @@ public class Sinkin {
         Utils.checkNull(cfg.getQueuePath(), "Require queuePath");
         Utils.checkNull(cfg.getSourceIP(), "Require source IP");
         Utils.checkNull(handler, "Require handler");
+        Utils.checkNull(cfg.getReaderName(), "Require readerName");
 
         _cfg = cfg;
         _handler = handler;
@@ -628,22 +634,41 @@ public class Sinkin {
     /**
      * lấy index của item cuối cùng trong queue
      * mục đích là để xác định vị trí cuối cùng đã đồng bộ từ Source từ đó tiếp tục đồng bộ
+     * valueA: src native index
+     * valueB: sequence
      */
     private LongLongObject _getLatestInfo() {
         try {
             if (_queue.lastIndex() >= 0) {
                 Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
 
+                LongLongObject result = new LongLongObject();
+
                 ExcerptTailer tailer = _queue.createTailer();
                 tailer.moveToIndex(_queue.lastIndex());
                 tailer.readBytes(bytes);
 
-                long index = bytes.readLong();
-                long seq = bytes.readLong();
+                if(_cfg.getCompress()){
+                    result.valueA = bytes.readLong();
+
+                    // giải nén
+                    byte[] compressedBytes = new byte[(int) bytes.readRemaining()];
+                    bytes.read(compressedBytes); // Đọc toàn bộ dữ liệu nén của msg này
+                    byte[] decompressData = Lz4Compressor.decompressData(compressedBytes);
+                    Bytes<ByteBuffer> bytesDecompress = Bytes.elasticByteBuffer();
+                    bytesDecompress.write(decompressData);
+
+                    result.valueB = bytesDecompress.readLong();
+
+                    bytesDecompress.releaseLast();
+                }else{
+                    result.valueA = bytes.readLong();
+                    result.valueB = bytes.readLong();
+                }
 
                 bytes.releaseLast();
 
-                return new LongLongObject(index, seq);
+                return result;
             } else {
                 return null;
             }
@@ -658,14 +683,26 @@ public class Sinkin {
      * lắng nghe các event được viết vào queue và call cho "Handler"
      */
     private void _onWriteQueue() {
-        ExcerptTailer tailer = _queue.createTailer();
-
-        // di chuyển tới cuối
-        tailer.toEnd();
 
         Bytes<ByteBuffer> bytesRead = Bytes.elasticByteBuffer();
         Bytes<ByteBuffer> bytesDecompress = Bytes.elasticByteBuffer();
         Bytes<ByteBuffer> bytesData = Bytes.elasticByteBuffer();
+
+        // tạo 1 tailer. Mặc định nó sẽ đọc từ lần cuối cùng nó đọc
+        ExcerptTailer tailer = _queue.createTailer(_cfg.getReaderName());
+        if (_cfg.getStartId() == -1) {
+            // nếu có yêu cầu replay từ đầu queue
+            tailer.toStart();
+        } else if (_cfg.getStartId() >= 0) {
+            // vì khi dùng hàm "moveToIndex" thì lần đọc tiếp theo là chính bản ghi có index đó
+            //      --> phải đọc trước 1 lần để tăng con trỏ đọc lên
+            if (tailer.moveToIndex(_cfg.getStartId())) {
+                tailer.readBytes(bytesRead);
+                bytesRead.clear();
+            } else {
+                log.error("Collection tailer fail because invalid index {}", _cfg.getStartId());
+            }
+        }
 
         Runnable waiter = OmniWaitStrategy.getWaiter(_cfg.getQueueWaitStrategy());
 

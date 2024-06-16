@@ -113,6 +113,13 @@ public class SinkinCfg {
     // dữ liệu nhận được có phải đã được nén ko
     private Boolean compress;
 
+    // bắt đầu đọc queue từ index nào. Nếu bằng "-1" thì nó sẽ đọc từ đầu
+    private Long startId;
+
+    // tên của người đọc. Nó sẽ dùng làm ID để sau khi restart, ta sẽ tiếp tục đọc từ vị trí cũ trong queue chứ ko phải đọc từ đầu
+    // required
+    private String readerName;
+
 
     private SinkinCfg() {
     }
@@ -142,6 +149,7 @@ public class SinkinCfg {
         config.setEnableSubMsgBindingCore(false);
         config.setSubMsgCpu(Constance.CPU_TYPE.NONE);
         config.setCompress(true);
+        config.setStartId(-2L);
 
         return config;
     }

@@ -21,6 +21,20 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 
+/*
+ * lưu vào queue:
+ *      - compress true: compress_data(["sequence"]["data"])
+ *      - compress false: ["sequence"]["data"] nguyên bản
+ * realtime publish:
+ *      - compress true: ["topic"]["native index"][compress_data(["sequence"]["data"])]
+ *      - compress false: ["topic"]["native index"]["sequence"]["data"]
+ * latest msg:
+ *      - compress true: ["topic"]["native index"][compress_data(["sequence"]["data"])]
+ *      - compress false: ["topic"]["native index"]["sequence"]["data"]
+ * confirm msg:
+ *      - compress true: ["độ dài dữ liệu nén"]["native index"][compress_data(["sequence"]["data"])]
+ *      - compress false: ["độ dài dữ liệu chính"]["native index"]["seq"]["data chính"]
+ */
 @Slf4j
 public class Fanout {
 
@@ -274,7 +288,7 @@ public class Fanout {
             _appender.writeBytes(_byte_compress);
             _byte_compress.clear();
         } else {
-            _appender.writeBytes(_byte_in);
+            _appender.writeBytes(eventData);
         }
     }
 

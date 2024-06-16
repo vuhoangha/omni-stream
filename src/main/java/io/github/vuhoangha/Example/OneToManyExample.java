@@ -32,7 +32,11 @@ public class OneToManyExample {
             System.out.println("Animal: " + animalTest.toString());
         };
 
-        new Sinkin(SinkinCfg.builder().setQueuePath(sinkPath).setSourceIP("127.0.0.1"), handler);
+        new Sinkin(SinkinCfg.builder()
+                .setQueuePath(sinkPath)
+                .setSourceIP("127.0.0.1")
+                .setReaderName("onus_spot_market_core")
+                .setStartId(2733660784558086L), handler);
     }
 
 
@@ -61,7 +65,7 @@ public class OneToManyExample {
             System.out.println("\n\uD83D\uDE80Send: " + animal);
             fanout.write(animal);
 
-            LockSupport.parkNanos(2_000_000_000L);
+            LockSupport.parkNanos(1_000_000_000L);
         }
     }
 
