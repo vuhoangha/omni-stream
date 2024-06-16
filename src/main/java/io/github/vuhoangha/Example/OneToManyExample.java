@@ -121,7 +121,9 @@ public class OneToManyExample {
 
         Utils.deleteFolder(sourcePath);
 
-        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(sourcePath).setCompress(false));
+        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(sourcePath).setCompress(true));
+
+        LockSupport.parkNanos(5_000_000_000L);
 
         int count = 1;
         AnimalTest animal = new AnimalTest(
