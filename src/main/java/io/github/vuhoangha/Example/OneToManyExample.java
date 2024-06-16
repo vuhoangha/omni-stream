@@ -16,7 +16,7 @@ public class OneToManyExample {
 
     public static void run() {
         new Thread(OneToManyExample::runSinkin).start();
-        LockSupport.parkNanos(3_000_000_000L);
+        LockSupport.parkNanos(1_000_000_000L);
         new Thread(OneToManyExample::runFanout).start();
     }
 
@@ -102,6 +102,13 @@ public class OneToManyExample {
 
         SinkinHandler handler = (long localIndex, long sequence, Bytes<ByteBuffer> data) -> {
             count.incrementAndGet();
+
+            System.out.println("\uD83D\uDCE9Received");
+            System.out.println("LocalIndex: " + localIndex);
+            System.out.println("Sequence: " + sequence);
+
+            AnimalTest animalTest = new AnimalTest(data);
+            System.out.println("Animal: " + animalTest);
         };
 
         new Sinkin(SinkinCfg.builder()
@@ -111,7 +118,7 @@ public class OneToManyExample {
                 .setStartId(-1L)
                 .setSubMsgCpu(Constance.CPU_TYPE.ANY)
                 .setDisruptorProcessMsgCpu(Constance.CPU_TYPE.ANY)
-                .setCompress(false), handler);
+                .setCompress(true), handler);
 
     }
 
@@ -125,27 +132,30 @@ public class OneToManyExample {
 
         LockSupport.parkNanos(5_000_000_000L);
 
-        int count = 1;
-        AnimalTest animal = new AnimalTest(
-                count, // index
-                count * 10L, // age
-                count * 10L, // weight
-                count * 10L, // height
-                count * 20L, // speed
-                count * 20L, // energy
-                count * 20L, // strength
-                count * 30L, // agility
-                count * 30L, // intelligence
-                count * 30L, // lifespan
-                count * 100L, // offspring
-                count * 100L  // territorySize
-        );
+
 
         for (int i = 0; i < 100_000_000; i++) {
-            for (int j = 0; j < 400_000; j++) {
+            for (int j = 0; j < 1; j++) {
+
+                int count = i;
+                AnimalTest animal = new AnimalTest(
+                        count, // index
+                        count * 10L, // age
+                        count * 10L, // weight
+                        count * 10L, // height
+                        count * 20L, // speed
+                        count * 20L, // energy
+                        count * 20L, // strength
+                        count * 30L, // agility
+                        count * 30L, // intelligence
+                        count * 30L, // lifespan
+                        count * 100L, // offspring
+                        count * 100L  // territorySize
+                );
+
                 fanout.write(animal);
             }
-            LockSupport.parkNanos(100_000_000L);
+            LockSupport.parkNanos(500_000_000L);
         }
 
         Utils.deleteFolder(sourcePath);
