@@ -1,72 +1,152 @@
 package io.github.vuhoangha.Example;
 
+import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.SinkinHandler;
+import io.github.vuhoangha.Common.Utils;
 import io.github.vuhoangha.Example.structure_example.AnimalTest;
 import io.github.vuhoangha.OneToMany.*;
 import net.openhft.chronicle.bytes.Bytes;
 
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 
 public class OneToManyExample {
 
 
-    public static String sourcePath = "fanout_queue";
-    public static String sinkPath = "sinkin_queue";
-
-
     public static void run() {
-        new Thread(OneToManyExample::runSource).start();
-        LockSupport.parkNanos(2_000_000_000L);
-        new Thread(OneToManyExample::runSink).start();
+        new Thread(OneToManyExample::runSinkin).start();
+        LockSupport.parkNanos(3_000_000_000L);
+        new Thread(OneToManyExample::runFanout).start();
     }
 
 
-    public static void runSink() {
-        SinkinHandler handler = (long localIndex, long sequence, Bytes<ByteBuffer> data) -> {
-            System.out.println("\uD83D\uDCE9Received");
-            System.out.println("LocalIndex: " + localIndex);
-            System.out.println("Sequence: " + sequence);
+    public static void fanoutBenchmark(int numberItem) {
 
-            AnimalTest animalTest = new AnimalTest(data);
-            System.out.println("Animal: " + animalTest.toString());
+        String sourcePath = "fanout_benchmark_folder";
+
+        Utils.deleteFolder(sourcePath);
+
+        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(sourcePath).setCompress(true));
+
+        int count = 1;
+        AnimalTest animal = new AnimalTest(
+                count, // index
+                count * 10L, // age
+                count * 10L, // weight
+                count * 10L, // height
+                count * 20L, // speed
+                count * 20L, // energy
+                count * 20L, // strength
+                count * 30L, // agility
+                count * 30L, // intelligence
+                count * 30L, // lifespan
+                count * 100L, // offspring
+                count * 100L  // territorySize
+        );
+
+        Utils.benchmark("Fanout benchmark", () -> {
+            for (int i = 0; i < numberItem; i++) {
+                fanout.write(animal);
+            }
+        });
+
+        Utils.deleteFolder(sourcePath);
+    }
+
+
+    public static void generateExampleData(int numberItem, String path) {
+
+        Utils.deleteFolder(path);
+
+        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(path).setCompress(true));
+
+        int count = 1;
+        AnimalTest animal = new AnimalTest(
+                count, // index
+                count * 10L, // age
+                count * 10L, // weight
+                count * 10L, // height
+                count * 20L, // speed
+                count * 20L, // energy
+                count * 20L, // strength
+                count * 30L, // agility
+                count * 30L, // intelligence
+                count * 30L, // lifespan
+                count * 100L, // offspring
+                count * 100L  // territorySize
+        );
+
+        for (int i = 0; i < numberItem; i++) {
+            fanout.write(animal);
+        }
+
+        fanout.shutdown();
+    }
+
+
+    public static void runSinkin() {
+
+        String path = "sinkin_queue";
+
+        Utils.deleteFolder(path);
+
+        AtomicInteger count = new AtomicInteger(0);
+        new Thread(() -> {
+            while (true) {
+                System.out.println("Rate " + count.get());
+                count.set(0);
+                LockSupport.parkNanos(1_000_000_000L);
+            }
+        }).start();
+
+        SinkinHandler handler = (long localIndex, long sequence, Bytes<ByteBuffer> data) -> {
+            count.incrementAndGet();
         };
 
         new Sinkin(SinkinCfg.builder()
-                .setQueuePath(sinkPath)
+                .setQueuePath(path)
                 .setSourceIP("127.0.0.1")
                 .setReaderName("onus_spot_market_core")
-                .setStartId(2733660784558086L), handler);
+                .setStartId(-1L)
+                .setSubMsgCpu(Constance.CPU_TYPE.ANY)
+                .setDisruptorProcessMsgCpu(Constance.CPU_TYPE.ANY)
+                .setCompress(false), handler);
+
     }
 
 
-    public static void runSource() {
-        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(sourcePath));
+    public static void runFanout() {
+        String sourcePath = "fanout_queue";
 
-        int count = 0;
-        while (true) {
-            count++;
+        Utils.deleteFolder(sourcePath);
 
-            AnimalTest animal = new AnimalTest(
-                    count, // index
-                    count * 10L, // age
-                    count * 20L, // weight
-                    count * 30L, // height
-                    count * 40L, // speed
-                    count * 50L, // energy
-                    count * 60L, // strength
-                    count * 70L, // agility
-                    count * 80L, // intelligence
-                    count * 90L, // lifespan
-                    count * 100L, // offspring
-                    count * 110L  // territorySize
-            );
+        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(sourcePath).setCompress(false));
 
-            System.out.println("\n\uD83D\uDE80Send: " + animal);
-            fanout.write(animal);
+        int count = 1;
+        AnimalTest animal = new AnimalTest(
+                count, // index
+                count * 10L, // age
+                count * 10L, // weight
+                count * 10L, // height
+                count * 20L, // speed
+                count * 20L, // energy
+                count * 20L, // strength
+                count * 30L, // agility
+                count * 30L, // intelligence
+                count * 30L, // lifespan
+                count * 100L, // offspring
+                count * 100L  // territorySize
+        );
 
-            LockSupport.parkNanos(1_000_000_000L);
+        for (int i = 0; i < 100_000_000; i++) {
+            for (int j = 0; j < 400_000; j++) {
+                fanout.write(animal);
+            }
+            LockSupport.parkNanos(100_000_000L);
         }
+
+        Utils.deleteFolder(sourcePath);
     }
 
 }

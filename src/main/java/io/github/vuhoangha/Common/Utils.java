@@ -5,6 +5,7 @@ import net.openhft.affinity.AffinityLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
 import java.text.MessageFormat;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.locks.LockSupport;
@@ -147,6 +148,36 @@ public class Utils {
             LOGGER.error(errorMessage);
             throw new IllegalArgumentException(errorMessage);
         }
+    }
+
+
+    public static void benchmark(String name, Runnable task) {
+        long start = System.currentTimeMillis();
+        task.run();
+        long total = System.currentTimeMillis() - start;
+        System.out.println(MessageFormat.format("{0} exec time: {1} ms", name, total));
+    }
+
+
+    public static void deleteFolder(String path) {
+        File folder = new File(path);
+        if (folder.exists() && folder.isDirectory()) {
+            deleteFolder(folder);
+        }
+    }
+
+    public static void deleteFolder(File folder) {
+        File[] files = folder.listFiles();
+        if (files != null) {
+            for (File file : files) {
+                if (file.isDirectory()) {
+                    deleteFolder(file);
+                } else {
+                    file.delete();
+                }
+            }
+        }
+        folder.delete();
     }
 
 
