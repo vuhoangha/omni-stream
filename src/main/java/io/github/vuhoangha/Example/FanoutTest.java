@@ -17,23 +17,38 @@ public class FanoutTest {
 
     public void run() {
         clear();
-        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(sourcePath));
+
+        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(sourcePath).setCompress(false));
 
         long start = System.currentTimeMillis();
-        for (int i = 0; i < 5_000_000; i++) {
+        for (int i = 0; i < 2_000_000; i++) {
 //            ObjectMultiField obj = new ObjectMultiField();
 //            Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
 //            obj.writeMarshallable(bytes);
 //            bytes.clear();
 
-            ObjectMultiField obj = new ObjectMultiField();
-            fanout.write(obj);
+            AnimalTest animal = new AnimalTest(
+                    i, // index
+                    i * 10L, // age
+                    i * 20L, // weight
+                    i * 30L, // height
+                    i * 40L, // speed
+                    i * 50L, // energy
+                    i * 60L, // strength
+                    i * 70L, // agility
+                    i * 80L, // intelligence
+                    i * 90L, // lifespan
+                    i * 100L, // offspring
+                    i * 110L  // territorySize
+            );
+            fanout.write(animal);
         }
         long total = System.currentTimeMillis() - start;
         System.out.println("Fanout: " + total + " ms");
 
         LockSupport.parkNanos(3_000_000_000L);
         fanout.shutdown();
+
         clear();
     }
 

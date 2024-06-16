@@ -18,6 +18,11 @@ public class Main {
 
 
     public static void main(String[] args) {
+
+//        run1();
+
+        new FanoutTest().run();
+
     }
 
 
@@ -25,7 +30,7 @@ public class Main {
         Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
 
         long start = System.currentTimeMillis();
-        for (int i = 0; i < 2_000_000; i++) {
+        for (int i = 0; i < 3_000_000; i++) {
             run(bytes);
             bytes.clear();
         }
@@ -66,6 +71,8 @@ public class Main {
 
         // Nén dữ liệu
         byte[] compressedData = Lz4Compressor.compressData(serializedData);
+
+        if(true)return;
 
         // Giải nén dữ liệu
         byte[] restoredData = Lz4Compressor.decompressData(compressedData);
