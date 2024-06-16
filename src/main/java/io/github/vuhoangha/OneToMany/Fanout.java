@@ -23,17 +23,17 @@ import java.util.concurrent.locks.LockSupport;
 
 /*
  * lưu vào queue:
- *      - compress true: compress_data(["sequence"]["data"])
- *      - compress false: ["sequence"]["data"] nguyên bản
+ *      - compress true: ["sequence"]["compress_data"]
+ *      - compress false: ["sequence"]["data"]
  * realtime publish:
- *      - compress true: ["topic"]["native index"][compress_data(["sequence"]["data"])]
+ *      - compress true: ["topic"]["native index"]["sequence"]["compress_data"]
  *      - compress false: ["topic"]["native index"]["sequence"]["data"]
  * latest msg:
- *      - compress true: ["topic"]["native index"][compress_data(["sequence"]["data"])]
+ *      - compress true: ["topic"]["native index"]["sequence"]["compress_data"]
  *      - compress false: ["topic"]["native index"]["sequence"]["data"]
  * confirm msg:
- *      - compress true: ["độ dài dữ liệu nén"]["native index"][compress_data(["sequence"]["data"])]
- *      - compress false: ["độ dài dữ liệu chính"]["native index"]["seq"]["data chính"]
+ *      - compress true: ["độ dài dữ liệu"]["native index"]["sequence"]["compress_data"]
+ *      - compress false: ["độ dài dữ liệu"]["native index"]["sequence"]["data"]
  */
 @Slf4j
 public class Fanout {
@@ -48,8 +48,8 @@ public class Fanout {
     private FanoutCfg _cfg;
     private SingleChronicleQueue _queue;
     private ExcerptAppender _appender;
-    Bytes<ByteBuffer> _byte_in = Bytes.elasticByteBuffer();
-    Bytes<ByteBuffer> _byte_compress = Bytes.elasticByteBuffer();
+    Bytes<ByteBuffer> _byte_to_queue = Bytes.elasticByteBuffer();           // dữ liệu để ghi vào queue
+    Bytes<ByteBuffer> _byte_event_input = Bytes.elasticByteBuffer();        // dữ liệu được đọc ra từ đối tượng muốn ghi vào queue
     private ZContext _zmq_context;
     List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
 
@@ -204,29 +204,14 @@ public class Fanout {
                             // update index của msg tiếp theo
                             nextReadIndex = tailer.index();
 
-                            if (_cfg.getCompress()) {
-                                // cấu trúc data ["độ dài dữ liệu nén"]["native index"]["dữ liệu nén gồm seq và data thực sự"]
+                            // độ dài dữ liệu chính trong queue - số byte để chứa sequence
+                            byteReplies.writeInt((int) byteRead.writePosition() - 8);
 
-                                // độ dài dữ liệu đã nén lấy từ queue
-                                byteReplies.writeInt((int) byteRead.writePosition());
+                            // đọc và nối thêm phần native index vào kết quả trả về
+                            byteReplies.writeLong(tailer.lastReadIndex());
 
-                                // đọc và nối thêm phần native index vào kết quả trả về
-                                byteReplies.writeLong(tailer.lastReadIndex());
-
-                                // nối phần nội dung msg (bao gồm độ dài data và data thực tế)
-                                byteReplies.write(byteRead);
-                            } else {
-                                // cấu trúc data ["độ dài dữ liệu chính"]["native index"]["seq"]["data chính"]
-
-                                // độ dài dữ liệu chính trong queue - số byte để chứa sequence
-                                byteReplies.writeInt((int) byteRead.writePosition() - 8);
-
-                                // đọc và nối thêm phần native index vào kết quả trả về
-                                byteReplies.writeLong(tailer.lastReadIndex());
-
-                                // nối phần nội dung msg (bao gồm độ dài data và data thực tế)
-                                byteReplies.write(byteRead);
-                            }
+                            // nối phần nội dung item từ queue (bao gồm sequence và data)
+                            byteReplies.write(byteRead);
 
                             // clear cho vòng lặp tiếp theo
                             byteRead.clear();
@@ -258,37 +243,42 @@ public class Fanout {
 
     public void write(WriteBytesMarshallable event) {
         try {
-            _byte_in.writeLong(++_seq_in_queue);
-            event.writeMarshallable(_byte_in);
-            _writeToQueue(_byte_in);
+            _byte_to_queue.writeLong(++_seq_in_queue);
+
+            event.writeMarshallable(_byte_event_input);
+
+            if (_cfg.getCompress()) {
+                byte[] compressedData = Lz4Compressor.compressData(_byte_event_input.toByteArray());
+                _byte_to_queue.write(compressedData);
+            } else {
+                _byte_to_queue.write(_byte_event_input);
+            }
+
+            _appender.writeBytes(_byte_to_queue);
         } catch (Exception ex) {
             log.error("Fanout write error, event {}", event.toString(), ex);
         } finally {
-            _byte_in.clear();
+            _byte_event_input.clear();
+            _byte_to_queue.clear();
         }
     }
 
     public void write(Bytes<?> eventData) {
         try {
-            _byte_in.writeLong(++_seq_in_queue);
-            _byte_in.write(eventData);
-            _writeToQueue(_byte_in);
+            _byte_to_queue.writeLong(++_seq_in_queue);
+
+            if (_cfg.getCompress()) {
+                byte[] compressedData = Lz4Compressor.compressData(eventData.toByteArray());
+                _byte_to_queue.write(compressedData);
+            } else {
+                _byte_to_queue.write(eventData);
+            }
+
+            _appender.writeBytes(_byte_to_queue);
         } catch (Exception ex) {
             log.error("Fanout write error", ex);
         } finally {
-            _byte_in.clear();
-        }
-    }
-
-
-    private void _writeToQueue(Bytes<?> eventData) {
-        if (_cfg.getCompress()) {
-            byte[] compressedData = Lz4Compressor.compressData(eventData.toByteArray());
-            _byte_compress.write(compressedData);
-            _appender.writeBytes(_byte_compress);
-            _byte_compress.clear();
-        } else {
-            _appender.writeBytes(eventData);
+            _byte_to_queue.clear();
         }
     }
 
@@ -359,7 +349,7 @@ public class Fanout {
         _appender.close();
         _queue.close();
 
-        _byte_in.releaseLast();
+        _byte_to_queue.releaseLast();
 
         // giải phóng CPU core/Logical processor
         for (AffinityCompose affinityCompose : _affinity_composes)

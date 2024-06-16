@@ -5,6 +5,7 @@ import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
 import io.github.vuhoangha.Common.*;
+import io.github.vuhoangha.Example.structure_example.AnimalTest;
 import io.github.vuhoangha.common.SynchronizeObjectPool;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.Affinity;
@@ -28,7 +29,7 @@ import java.util.concurrent.locks.LockSupport;
 
 /*
  * lưu vào queue:
- *      - compress true: ["src native index"][compress_data(["sequence"]["data"])]
+ *      - compress true: ["src native index"]["sequence"]["compress_data"]
  *      - compress false: ["src native index"]["sequence"]["data"]
  */
 @Slf4j
@@ -48,7 +49,6 @@ public class Sinkin {
     private final ZContext _zmq_context;
     private final Bytes<ByteBuffer> _byte_miss_msg = Bytes.elasticByteBuffer();     // dùng để tạo data lấy msg miss
     private final Bytes<ByteBuffer> _byte_process_msg = Bytes.elasticByteBuffer();     // dùng để tạo data xử lý msg
-    private final Bytes<ByteBuffer> _byte_decompress_data = Bytes.elasticByteBuffer();     // data giải nén từ queue ra
     private Disruptor<SinkProcessMsg> _disruptor_process_msg;
     private RingBuffer<SinkProcessMsg> _ring_buffer_process_msg;
     private Disruptor<CheckMissMsg> _disruptor_miss_msg;
@@ -107,7 +107,7 @@ public class Sinkin {
      * Hàm này sẽ đồng bộ hoàn toàn msg từ src --> sink. Khi đã hoàn thành thì mới sub msg mới
      * cấu trúc request: ["type"]["src index"]
      * Cấu trúc response: ["msg_1"]["msg_2"]...vvv
-     * cấu trúc từng msg con msg_1, msg_2..vv:  ["độ dài data nén 1]["source native index 1"]["data nén 1"]["độ dài data nén 2]["source native index 2"]["data nén 2"]
+     * cấu trúc từng msg con msg_1, msg_2..vv:  ["độ dài data 1]["source native index 1"]["sequence 1"]["data nén 1"]["độ dài data 2]["source native index 2"]["sequence 2"]["data nén 2"]
      */
     private void _sync() {
         ZMQ.Socket socket = _zmq_context.createSocket(SocketType.REQ);
@@ -116,7 +116,6 @@ public class Sinkin {
         ExcerptAppender localAppender = _queue.acquireAppender();
         Bytes<ByteBuffer> byteRes = Bytes.elasticByteBuffer();   // chứa byte[] của tất cả bản ghi trả về
         Bytes<ByteBuffer> byteToQueue = Bytes.elasticByteBuffer();   // chứa byte[] để ghi vào queue
-        Bytes<ByteBuffer> byteDecompress = Bytes.elasticByteBuffer();   // chứa dữ liệu được giải nén
 
         try {
             while (_status.get() == SYNCING) {
@@ -141,57 +140,26 @@ public class Sinkin {
                 byteRes.write(repData);
 
                 while (byteRes.readRemaining() > 0) {
+                    // cấu trúc data ["độ dài data]["source native index"]["sequence"]["data"][
 
-                    if (_cfg.getCompress()) {
-                        // cấu trúc data ["độ dài dữ liệu nén"]["native index"]["dữ liệu nén gồm seq và data thực sự"]
+                    // độ dài dữ liệu nén
+                    int dataLen = byteRes.readInt();
 
-                        // độ dài dữ liệu nén
-                        int dataLen = byteRes.readInt();
+                    // lấy phần dữ liệu để ghi vào queue
+                    byteToQueue.write(byteRes, byteRes.readPosition(), 8 + 8 + dataLen);
 
-                        // lấy phần dữ liệu để ghi vào queue
-                        byteToQueue.write(byteRes, byteRes.readPosition(), 8 + dataLen);
+                    long srcIndex = byteRes.readLong();
+                    long seq = byteRes.readLong();
+                    byteRes.readSkip(dataLen);              // bỏ qua data chính
 
-                        // update native index
-                        long srcIndex = byteRes.readLong();
-
-                        // giải nén
-                        byte[] compressedBytes = new byte[dataLen];
-                        byteRes.read(compressedBytes); // Đọc toàn bộ dữ liệu nén của msg này
-                        byte[] decompressData = Lz4Compressor.decompressData(compressedBytes);
-                        byteDecompress.write(decompressData);
-
-                        // nếu msg không tuần tự thì báo lỗi luôn
-                        long seq = byteDecompress.readLong();
-                        byteDecompress.clear();
-                        if (seq != _seq_in_queue + 1) {
-                            log.error("Sinkin _sync not sequence, src_seq: {}, sink_seq: {}", seq, _seq_in_queue);
-                            return;
-                        }
-
-                        // update seq và native index
-                        _seq_in_queue++;
-                        _src_latest_index = srcIndex;
-                    } else {
-                        // cấu trúc data ["độ dài dữ liệu chính"]["native index"]["seq"]["data chính"]
-
-                        // lấy phần dữ liệu để ghi vào queue
-                        int dataLen = byteRes.readInt();
-                        byteToQueue.write(byteRes, byteRes.readPosition(), 8 + 8 + dataLen);
-
-                        long srcIndex = byteRes.readLong();
-                        long seq = byteRes.readLong();
-                        byteRes.readSkip(dataLen);              // bỏ qua data chính
-
-                        // nếu msg không tuần tự thì báo lỗi luôn
-                        if (seq != _seq_in_queue + 1) {
-                            log.error("Sinkin _sync not sequence, src_seq: {}, sink_seq: {}", seq, _seq_in_queue);
-                            return;
-                        }
-
-                        // update seq và native index
-                        _seq_in_queue++;
-                        _src_latest_index = srcIndex;
+                    if (seq != _seq_in_queue + 1) {
+                        log.error("Sinkin _sync not sequence, src_seq: {}, sink_seq: {}", seq, _seq_in_queue);
+                        return;
                     }
+
+                    // update seq và native index
+                    _seq_in_queue++;
+                    _src_latest_index = srcIndex;
 
                     // write to queue
                     localAppender.writeBytes(byteToQueue);
@@ -199,6 +167,7 @@ public class Sinkin {
                     // clear temp data
                     byteToQueue.clear();
                 }
+
                 byteRes.clear();
             }
 
@@ -405,52 +374,22 @@ public class Sinkin {
     private void _onMsg(SinkProcessMsg event) {
         try {
             if (event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.MSG) {
-                if (_cfg.getCompress()) {
-                    // chỉ có 1 msg duy nhất. Cấu trúc ["msg type"]["source native index 1"]["data nén"]
-                    // data được giải nén có cấu trúc ["seq in queue 1"]["data 1"]
+                // chỉ có 1 msg duy nhất. Cấu trúc ["msg type"]["source native index"]["seq in queue"]["data"]
 
-                    _byte_process_msg.write(event.getData());
+                _byte_process_msg.write(event.getData());
 
-                    TranspotMsg tMsg = _transpot_msg_pool.pop();
+                TranspotMsg tMsg = _transpot_msg_pool.pop();
 
-                    // dữ liệu ghi vào queue
-                    tMsg.getQueueData().append(_byte_process_msg.bytesStore(), 1, (int) _byte_process_msg.readLimit());
+                tMsg.getQueueData().write(_byte_process_msg, 1, _byte_process_msg.readLimit() - 1);
 
-                    _byte_process_msg.readByte();       // byte đầu ko cần nên bỏ
-                    tMsg.setSrcIndex(_byte_process_msg.readLong());
+                _byte_process_msg.readByte();       // byte đầu ko cần nên bỏ
+                tMsg.setSrcIndex(_byte_process_msg.readLong());
+                tMsg.setSeq(_byte_process_msg.readLong());
+                _byte_process_msg.read(tMsg.getData(), (int) _byte_process_msg.readRemaining());
 
-                    // giải nén để lấy sequence và data
-                    long remainingBytes = _byte_process_msg.readRemaining(); // Số byte còn lại từ vị trí hiện tại
-                    byte[] compressedBytes = new byte[(int) remainingBytes];
-                    _byte_process_msg.read(compressedBytes); // Đọc toàn bộ byte còn lại vào mảng bytes
-                    byte[] decompressData = Lz4Compressor.decompressData(compressedBytes);
-                    _byte_decompress_data.write(decompressData);
+                _processOneMsg(tMsg);
 
-                    tMsg.setSeq(_byte_decompress_data.readLong());
-                    tMsg.getData().write(_byte_decompress_data, _byte_decompress_data.readPosition(), _byte_decompress_data.readRemaining());
-
-                    _processOneMsg(tMsg);
-
-                    _byte_decompress_data.clear();
-                    _byte_process_msg.clear();
-                } else {
-                    // chỉ có 1 msg duy nhất. Cấu trúc ["msg type"]["source native index 1"]["seq in queue 1"]["data 1"]
-
-                    _byte_process_msg.write(event.getData());
-
-                    TranspotMsg tMsg = _transpot_msg_pool.pop();
-
-                    tMsg.getQueueData().write(_byte_process_msg, 1, _byte_process_msg.readLimit() - 1);
-
-                    _byte_process_msg.readByte();       // byte đầu ko cần nên bỏ
-                    tMsg.setSrcIndex(_byte_process_msg.readLong());
-                    tMsg.setSeq(_byte_process_msg.readLong());
-                    tMsg.getData().write(_byte_process_msg, _byte_process_msg.readPosition(), _byte_process_msg.readRemaining());
-
-                    _processOneMsg(tMsg);
-
-                    _byte_process_msg.clear();
-                }
+                _byte_process_msg.clear();
             } else if (event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.MULTI_MSG) {
                 // có thể có nhiều msg
 
@@ -460,32 +399,14 @@ public class Sinkin {
                 while (_byte_process_msg.readRemaining() > 0) {
                     TranspotMsg tMsg = _transpot_msg_pool.pop();
 
-                    if (_cfg.getCompress()) {
-                        // Cấu trúc: ["độ dài data nén 1"]["source native index 1"]["compressed data 1"]["độ dài data nén 2"]["source native index 2"]["seq in queue 2"]["data 2"]
-                        int dataLen = _byte_process_msg.readInt();
-                        tMsg.getQueueData().write(_byte_process_msg, _byte_process_msg.readPosition(), 8 + dataLen);    // đọc nhưng ko ảnh hưởng readPosition trong _byte_process_msg
-                        tMsg.setSrcIndex(_byte_process_msg.readLong());
-
-                        // giải nén
-                        byte[] compressedBytes = new byte[dataLen];
-                        _byte_process_msg.read(compressedBytes); // Đọc toàn bộ dữ liệu nén của msg này
-                        byte[] decompressData = Lz4Compressor.decompressData(compressedBytes);
-                        _byte_decompress_data.write(decompressData);
-
-                        // lấy thông tin từ dữ liệu nén
-                        tMsg.setSeq(_byte_decompress_data.readLong());
-                        tMsg.getData().write(_byte_decompress_data, _byte_decompress_data.readPosition(), _byte_decompress_data.readRemaining());
-                    } else {
-                        // Cấu trúc: ["độ dài data 1"]["source native index 1"]["seq in queue 1"]["data 1"]["độ dài data 2"]["source native index 2"]["seq in queue 2"]["data 2"]
-                        int dataLen = _byte_process_msg.readInt();
-                        tMsg.getQueueData().write(_byte_process_msg, _byte_process_msg.readPosition(), 8 + 8 + dataLen);    // đọc nhưng ko ảnh hưởng readPosition trong _byte_process_msg
-                        tMsg.setSrcIndex(_byte_process_msg.readLong());
-                        tMsg.setSeq(_byte_process_msg.readLong());
-                        _byte_process_msg.read(tMsg.getData(), dataLen);
-                    }
+                    // Cấu trúc: ["độ dài data 1"]["source native index 1"]["seq in queue 1"]["data 1"]["độ dài data 2"]["source native index 2"]["seq in queue 2"]["data 2"]
+                    int dataLen = _byte_process_msg.readInt();
+                    tMsg.getQueueData().write(_byte_process_msg, _byte_process_msg.readPosition(), 8 + 8 + dataLen);    // đọc nhưng ko ảnh hưởng readPosition trong _byte_process_msg
+                    tMsg.setSrcIndex(_byte_process_msg.readLong());
+                    tMsg.setSeq(_byte_process_msg.readLong());
+                    _byte_process_msg.read(tMsg.getData(), dataLen);
 
                     _processOneMsg(tMsg);
-                    _byte_decompress_data.clear();
                 }
 
                 _byte_process_msg.clear();
@@ -642,29 +563,11 @@ public class Sinkin {
             if (_queue.lastIndex() >= 0) {
                 Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
 
-                LongLongObject result = new LongLongObject();
-
                 ExcerptTailer tailer = _queue.createTailer();
                 tailer.moveToIndex(_queue.lastIndex());
                 tailer.readBytes(bytes);
 
-                if(_cfg.getCompress()){
-                    result.valueA = bytes.readLong();
-
-                    // giải nén
-                    byte[] compressedBytes = new byte[(int) bytes.readRemaining()];
-                    bytes.read(compressedBytes); // Đọc toàn bộ dữ liệu nén của msg này
-                    byte[] decompressData = Lz4Compressor.decompressData(compressedBytes);
-                    Bytes<ByteBuffer> bytesDecompress = Bytes.elasticByteBuffer();
-                    bytesDecompress.write(decompressData);
-
-                    result.valueB = bytesDecompress.readLong();
-
-                    bytesDecompress.releaseLast();
-                }else{
-                    result.valueA = bytes.readLong();
-                    result.valueB = bytes.readLong();
-                }
+                LongLongObject result = new LongLongObject(bytes.readLong(), bytes.readLong());
 
                 bytes.releaseLast();
 
@@ -710,6 +613,7 @@ public class Sinkin {
             try {
                 if (tailer.readBytes(bytesRead)) {
                     bytesRead.readSkip(8);      // bỏ qua src index
+                    long seq = bytesRead.readLong();
 
                     if (_cfg.getCompress()) {
                         // giải nén
@@ -718,18 +622,11 @@ public class Sinkin {
                         byte[] decompressData = Lz4Compressor.decompressData(compressedBytes);
                         bytesDecompress.write(decompressData);
 
-                        // lấy thông tin từ dữ liệu nén
-                        long seq = bytesDecompress.readLong();
-                        bytesData.write(bytesDecompress, bytesDecompress.readPosition(), bytesDecompress.readRemaining());
-
-                        _handler.apply(tailer.lastReadIndex(), seq, bytesData);
+                        _handler.apply(tailer.lastReadIndex(), seq, bytesDecompress);
                     } else {
-                        long seq = bytesRead.readLong();
-                        bytesRead.read(bytesData, (int) bytesRead.readRemaining()); // data
-
+                        bytesRead.read(bytesData, (int) bytesRead.readRemaining());
                         _handler.apply(tailer.lastReadIndex(), seq, bytesData);
                     }
-
 
                     bytesRead.clear();
                     bytesData.clear();
