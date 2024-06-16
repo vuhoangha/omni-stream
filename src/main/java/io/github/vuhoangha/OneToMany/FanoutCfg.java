@@ -86,6 +86,9 @@ public class FanoutCfg {
      */
     private Integer handleConfirmCpu;
 
+    // có nén data khi ghi ko
+    private Boolean compress;
+
 
     private FanoutCfg() {
     }
@@ -106,6 +109,7 @@ public class FanoutCfg {
         cfg.setQueueCpu(Constance.CPU_TYPE.NONE);
         cfg.setEnableHandleConfirmBindingCore(false);
         cfg.setHandleConfirmCpu(Constance.CPU_TYPE.NONE);
+        cfg.setCompress(true);
 
         return cfg;
     }

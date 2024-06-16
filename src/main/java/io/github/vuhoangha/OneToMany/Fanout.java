@@ -1,9 +1,6 @@
 package io.github.vuhoangha.OneToMany;
 
-import io.github.vuhoangha.Common.AffinityCompose;
-import io.github.vuhoangha.Common.Constance;
-import io.github.vuhoangha.Common.OmniWaitStrategy;
-import io.github.vuhoangha.Common.Utils;
+import io.github.vuhoangha.Common.*;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
@@ -38,6 +35,7 @@ public class Fanout {
     private SingleChronicleQueue _queue;
     private ExcerptAppender _appender;
     Bytes<ByteBuffer> _byte_in = Bytes.elasticByteBuffer();
+    Bytes<ByteBuffer> _byte_compress = Bytes.elasticByteBuffer();
     private ZContext _zmq_context;
     List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
 
@@ -192,14 +190,25 @@ public class Fanout {
                             // update index của msg tiếp theo
                             nextReadIndex = tailer.index();
 
-                            // độ dài dữ liệu chính trong queue - số byte để chứa sequence
-                            byteReplies.writeInt((int) byteRead.writePosition() - 8);
+                            if (_cfg.getCompress()) {
+                                // độ dài dữ liệu đã nén lấy từ queue
+                                byteReplies.writeInt((int) byteRead.writePosition());
 
-                            // đọc và nối thêm phần native index vào kết quả trả về
-                            byteReplies.writeLong(tailer.lastReadIndex());
+                                // đọc và nối thêm phần native index vào kết quả trả về
+                                byteReplies.writeLong(tailer.lastReadIndex());
 
-                            // nối phần nội dung msg (bao gồm độ dài data và data thực tế)
-                            byteReplies.write(byteRead);
+                                // nối phần nội dung msg (bao gồm độ dài data và data thực tế)
+                                byteReplies.write(byteRead);
+                            } else {
+                                // độ dài dữ liệu chính trong queue - số byte để chứa sequence
+                                byteReplies.writeInt((int) byteRead.writePosition() - 8);
+
+                                // đọc và nối thêm phần native index vào kết quả trả về
+                                byteReplies.writeLong(tailer.lastReadIndex());
+
+                                // nối phần nội dung msg (bao gồm độ dài data và data thực tế)
+                                byteReplies.write(byteRead);
+                            }
 
                             // clear cho vòng lặp tiếp theo
                             byteRead.clear();
@@ -233,7 +242,7 @@ public class Fanout {
         try {
             _byte_in.writeLong(++_seq_in_queue);
             event.writeMarshallable(_byte_in);
-            _appender.writeBytes(_byte_in);
+            _writeToQueue(_byte_in);
         } catch (Exception ex) {
             log.error("Fanout write error, event {}", event.toString(), ex);
         } finally {
@@ -245,11 +254,23 @@ public class Fanout {
         try {
             _byte_in.writeLong(++_seq_in_queue);
             _byte_in.write(eventData);
-            _appender.writeBytes(_byte_in);
+            _writeToQueue(_byte_in);
         } catch (Exception ex) {
             log.error("Fanout write error", ex);
         } finally {
             _byte_in.clear();
+        }
+    }
+
+
+    private void _writeToQueue(Bytes<?> eventData) {
+        if (_cfg.getCompress()) {
+            byte[] compressedData = Lz4Compressor.compressData(eventData.toByteArray());
+            _byte_compress.write(compressedData);
+            _appender.writeBytes(_byte_compress);
+            _byte_compress.clear();
+        } else {
+            _appender.writeBytes(_byte_in);
         }
     }
 

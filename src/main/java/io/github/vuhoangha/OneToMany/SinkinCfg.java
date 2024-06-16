@@ -110,6 +110,9 @@ public class SinkinCfg {
     // kiểu WaitStrategy được sử dụng lắng nghe các item mới được ghi vào queue
     private OmniWaitStrategy queueWaitStrategy;
 
+    // dữ liệu nhận được có phải đã được nén ko
+    private Boolean compress;
+
 
     private SinkinCfg() {
     }
@@ -138,6 +141,7 @@ public class SinkinCfg {
         config.setCheckMissMsgAndSubQueueCpu(Constance.CPU_TYPE.NONE);
         config.setEnableSubMsgBindingCore(false);
         config.setSubMsgCpu(Constance.CPU_TYPE.NONE);
+        config.setCompress(true);
 
         return config;
     }

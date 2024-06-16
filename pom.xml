@@ -104,6 +104,12 @@
             <version>1.0.4</version>
         </dependency>
 
+        <!--    LZ4    -->
+        <dependency>
+            <groupId>org.lz4</groupId>
+            <artifactId>lz4-java</artifactId>
+            <version>1.8.0</version> <!-- Hoặc phiên bản mới hơn -->
+        </dependency>
 
     </dependencies>
 
