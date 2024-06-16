@@ -1,6 +1,7 @@
 package io.github.vuhoangha.Example;
 
 import io.github.vuhoangha.Common.SinkinHandler;
+import io.github.vuhoangha.Example.structure_example.AnimalTest;
 import io.github.vuhoangha.OneToMany.*;
 import net.openhft.chronicle.bytes.Bytes;
 
@@ -10,8 +11,8 @@ import java.util.concurrent.locks.LockSupport;
 public class OneToManyExample {
 
 
-    public static String sourcePath = "xxx";
-    public static String sinkPath = "zzz";
+    public static String sourcePath = "fanout_queue";
+    public static String sinkPath = "sinkin_queue";
 
 
     public static void run() {
@@ -26,7 +27,9 @@ public class OneToManyExample {
             System.out.println("\uD83D\uDCE9Received");
             System.out.println("LocalIndex: " + localIndex);
             System.out.println("Sequence: " + sequence);
-            System.out.println("People: " + data.toString());
+
+            AnimalTest animalTest = new AnimalTest(data);
+            System.out.println("Animal: " + animalTest.toString());
         };
 
         new Sinkin(SinkinCfg.builder().setQueuePath(sinkPath).setSourceIP("127.0.0.1"), handler);
@@ -34,21 +37,32 @@ public class OneToManyExample {
 
 
     public static void runSource() {
-//        Fanout<PeopleTest> fanout = new Fanout<>(
-//                FanoutCfg.builder().setQueuePath(sourcePath),
-//                PeopleTest.class);
-//
-//        PeopleTest people = new PeopleTest();
-//        int count = 0;
-//        while (true) {
-//            count++;
-//            people.setIndex(count);
-//            people.setName("people " + count);
-//            System.out.println("\n\uD83D\uDE80Send: " + people);
-//            fanout.write(people);
-//
-//            LockSupport.parkNanos(2_000_000_000L);
-//        }
+        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(sourcePath));
+
+        int count = 0;
+        while (true) {
+            count++;
+
+            AnimalTest animal = new AnimalTest(
+                    count, // index
+                    count * 10L, // age
+                    count * 20L, // weight
+                    count * 30L, // height
+                    count * 40L, // speed
+                    count * 50L, // energy
+                    count * 60L, // strength
+                    count * 70L, // agility
+                    count * 80L, // intelligence
+                    count * 90L, // lifespan
+                    count * 100L, // offspring
+                    count * 110L  // territorySize
+            );
+
+            System.out.println("\n\uD83D\uDE80Send: " + animal);
+            fanout.write(animal);
+
+            LockSupport.parkNanos(2_000_000_000L);
+        }
     }
 
 }

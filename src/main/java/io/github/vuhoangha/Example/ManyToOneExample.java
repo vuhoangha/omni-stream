@@ -1,5 +1,6 @@
 package io.github.vuhoangha.Example;
 
+import io.github.vuhoangha.Example.structure_example.PeopleTest;
 import io.github.vuhoangha.ManyToOne.Collector;
 import io.github.vuhoangha.ManyToOne.CollectorCfg;
 import io.github.vuhoangha.ManyToOne.Snipper;

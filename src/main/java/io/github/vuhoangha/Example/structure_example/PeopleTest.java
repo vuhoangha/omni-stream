@@ -1,4 +1,4 @@
-package io.github.vuhoangha.Example;
+package io.github.vuhoangha.Example.structure_example;
 
 import net.openhft.chronicle.wire.SelfDescribingMarshallable;
 

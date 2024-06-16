@@ -101,7 +101,7 @@ public class Sinkin {
      * Hàm này sẽ đồng bộ hoàn toàn msg từ src --> sink. Khi đã hoàn thành thì mới sub msg mới
      * cấu trúc request: ["type"]["src index"]
      * Cấu trúc response: ["msg_1"]["msg_2"]...vvv
-     * cấu trúc từng msg con msg_1, msg_2..vv:  ["source native index 1"]["độ dài data 1 gồm cả seq in queue"]["seq in queue 1"]["data 1"]
+     * cấu trúc từng msg con msg_1, msg_2..vv:  ["độ dài data nén 1]["source native index 1"]["data nén 1"]["độ dài data nén 2]["source native index 2"]["data nén 2"]
      */
     private void _sync() {
         ZMQ.Socket socket = _zmq_context.createSocket(SocketType.REQ);
@@ -110,13 +110,14 @@ public class Sinkin {
         ExcerptAppender localAppender = _queue.acquireAppender();
         Bytes<ByteBuffer> byteRes = Bytes.elasticByteBuffer();   // chứa byte[] của tất cả bản ghi trả về
         Bytes<ByteBuffer> byteToQueue = Bytes.elasticByteBuffer();   // chứa byte[] để ghi vào queue
+        Bytes<ByteBuffer> byteDecompress = Bytes.elasticByteBuffer();   // chứa dữ liệu được giải nén
 
         try {
             while (_status.get() == SYNCING) {
                 // tổng hợp data rồi req sang src
                 _byte_miss_msg.writeByte(Constance.FANOUT.CONFIRM.FROM_LATEST);
                 _byte_miss_msg.writeLong(_src_latest_index);
-                socket.send(_byte_miss_msg.underlyingObject().array(), 0);
+                socket.send(_byte_miss_msg.toByteArray(), 0);
                 _byte_miss_msg.clear();
 
                 // chờ dữ liệu trả về
@@ -135,23 +136,56 @@ public class Sinkin {
 
                 while (byteRes.readRemaining() > 0) {
 
-                    // lấy phần dữ liệu để ghi vào queue
-                    int dataLen = byteRes.readInt();
-                    byteToQueue.write(byteRes, byteRes.readPosition(), 8 + 8 + dataLen);
+                    if (_cfg.getCompress()) {
+                        // cấu trúc data ["độ dài dữ liệu nén"]["native index"]["dữ liệu nén gồm seq và data thực sự"]
 
-                    long srcIndex = byteRes.readLong();
-                    long seq = byteRes.readLong();
-                    byteRes.readSkip(dataLen);              // bỏ qua data chính
+                        // độ dài dữ liệu nén
+                        int dataLen = byteRes.readInt();
 
-                    // nếu msg không tuần tự thì báo lỗi luôn
-                    if (seq != _seq_in_queue + 1) {
-                        log.error("Sinkin _sync not sequence, src_seq: {}, sink_seq: {}", seq, _seq_in_queue);
-                        return;
+                        // lấy phần dữ liệu để ghi vào queue
+                        byteToQueue.write(byteRes, byteRes.readPosition(), 8 + dataLen);
+
+                        // update native index
+                        long srcIndex = byteRes.readLong();
+
+                        // giải nén
+                        byte[] compressedBytes = new byte[dataLen];
+                        byteRes.read(compressedBytes); // Đọc toàn bộ dữ liệu nén của msg này
+                        byte[] decompressData = Lz4Compressor.decompressData(compressedBytes);
+                        byteDecompress.write(decompressData);
+
+                        // nếu msg không tuần tự thì báo lỗi luôn
+                        long seq = byteDecompress.readLong();
+                        byteDecompress.clear();
+                        if (seq != _seq_in_queue + 1) {
+                            log.error("Sinkin _sync not sequence, src_seq: {}, sink_seq: {}", seq, _seq_in_queue);
+                            return;
+                        }
+
+                        // update seq và native index
+                        _seq_in_queue++;
+                        _src_latest_index = srcIndex;
+                    } else {
+                        // cấu trúc data ["độ dài dữ liệu chính"]["native index"]["seq"]["data chính"]
+
+                        // lấy phần dữ liệu để ghi vào queue
+                        int dataLen = byteRes.readInt();
+                        byteToQueue.write(byteRes, byteRes.readPosition(), 8 + 8 + dataLen);
+
+                        long srcIndex = byteRes.readLong();
+                        long seq = byteRes.readLong();
+                        byteRes.readSkip(dataLen);              // bỏ qua data chính
+
+                        // nếu msg không tuần tự thì báo lỗi luôn
+                        if (seq != _seq_in_queue + 1) {
+                            log.error("Sinkin _sync not sequence, src_seq: {}, sink_seq: {}", seq, _seq_in_queue);
+                            return;
+                        }
+
+                        // update seq và native index
+                        _seq_in_queue++;
+                        _src_latest_index = srcIndex;
                     }
-
-                    // update seq và native index
-                    _seq_in_queue++;
-                    _src_latest_index = srcIndex;
 
                     // write to queue
                     localAppender.writeBytes(byteToQueue);
@@ -374,7 +408,7 @@ public class Sinkin {
                     TranspotMsg tMsg = _transpot_msg_pool.pop();
 
                     // dữ liệu ghi vào queue
-                    tMsg.getQueueData().append(_byte_process_msg.bytesStore(), 1, (int) _byte_process_msg.readLimit() - 1);
+                    tMsg.getQueueData().append(_byte_process_msg.bytesStore(), 1, (int) _byte_process_msg.readLimit());
 
                     _byte_process_msg.readByte();       // byte đầu ko cần nên bỏ
                     tMsg.setSrcIndex(_byte_process_msg.readLong());
@@ -667,6 +701,10 @@ public class Sinkin {
                     waiter.run();
                 }
             } catch (Exception ex) {
+                bytesRead.clear();
+                bytesData.clear();
+                bytesDecompress.clear();
+
                 log.error("Sinkin OnWriteQueue error", ex);
             }
         }

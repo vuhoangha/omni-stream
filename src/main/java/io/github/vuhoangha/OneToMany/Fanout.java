@@ -191,6 +191,8 @@ public class Fanout {
                             nextReadIndex = tailer.index();
 
                             if (_cfg.getCompress()) {
+                                // cấu trúc data ["độ dài dữ liệu nén"]["native index"]["dữ liệu nén gồm seq và data thực sự"]
+
                                 // độ dài dữ liệu đã nén lấy từ queue
                                 byteReplies.writeInt((int) byteRead.writePosition());
 
@@ -200,6 +202,8 @@ public class Fanout {
                                 // nối phần nội dung msg (bao gồm độ dài data và data thực tế)
                                 byteReplies.write(byteRead);
                             } else {
+                                // cấu trúc data ["độ dài dữ liệu chính"]["native index"]["seq"]["data chính"]
+
                                 // độ dài dữ liệu chính trong queue - số byte để chứa sequence
                                 byteReplies.writeInt((int) byteRead.writePosition() - 8);
 
