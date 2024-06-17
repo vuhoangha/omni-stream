@@ -20,7 +20,7 @@ public class SaraswatiAnubisExample {
     public static void runNormal() {
         new Thread(SaraswatiAnubisExample::runSaraswatiNormal).start();
         LockSupport.parkNanos(2_000_000_000L);
-        new Thread(SaraswatiAnubisExample::runAnubisNormal).start();
+        new Thread(() -> SaraswatiAnubisExample.runAnubisNormal("anubis_queue_temp")).start();
     }
 
     public static void runSaraswatiNormal() {
@@ -32,9 +32,9 @@ public class SaraswatiAnubisExample {
         );
     }
 
-    public static void runAnubisNormal() {
+    public static void runAnubisNormal(String queuePath) {
         Anubis anubis = new Anubis(
-                AnubisCfg.getDefault().setSaraswatiIP("127.0.0.1")
+                AnubisCfg.getDefault().setSaraswatiIP("127.0.0.1").setQueueTempPath(queuePath)
         );
 
         int count = 1;
@@ -70,7 +70,8 @@ public class SaraswatiAnubisExample {
     public static void runBenchmark() {
         new Thread(SaraswatiAnubisExample::runSaraswatiBenchmark).start();
         LockSupport.parkNanos(2_000_000_000L);
-        new Thread(SaraswatiAnubisExample::runAnubisBenchmark).start();
+        new Thread(() -> SaraswatiAnubisExample.runAnubisBenchmark("anubis_queue_temp_1")).start();
+//        new Thread(() -> SaraswatiAnubisExample.runAnubisBenchmark("anubis_queue_temp_2")).start();
     }
 
     public static void runSaraswatiBenchmark() {
@@ -92,9 +93,9 @@ public class SaraswatiAnubisExample {
         );
     }
 
-    public static void runAnubisBenchmark() {
+    public static void runAnubisBenchmark(String queuePath) {
         Anubis anubis = new Anubis(
-                AnubisCfg.getDefault().setSaraswatiIP("127.0.0.1")
+                AnubisCfg.bestPerf().setSaraswatiIP("127.0.0.1").setQueueTempPath(queuePath)
         );
 
         int count = 1;
@@ -116,7 +117,7 @@ public class SaraswatiAnubisExample {
         LockSupport.parkNanos(5_000_000_000L);
 
         for (int i = 0; i < 100_000_000; i++) {
-            for (int j = 0; j < 80_000; j++) {
+            for (int j = 0; j < 100_000; j++) {
                 anubis.sendAsync(animal, new Promise<>());
             }
 

@@ -51,9 +51,7 @@ public class Saraswati {
     }
 
 
-    /**
-     * Chạy luồng chính
-     */
+    // Chạy luồng chính
     private void _initMainFlow() {
         log.info("Saraswati run Main Flow on logical processor {}", Affinity.getCpu());
 
@@ -84,24 +82,24 @@ public class Saraswati {
             socket.setHeartbeatTimeout(15000);
             socket.bind(_cfg.getUrl());
 
-            byte[] clientAddress;
-            byte[] request;
             Bytes<ByteBuffer> bytesReq = Bytes.elasticByteBuffer();     // tất cả dữ liệu gửi sang, cấu trúc ["time_to_live"]["req_id"]["data"]
             Bytes<ByteBuffer> bytesData = Bytes.elasticByteBuffer();    // thông tin dữ liệu gửi sang
 
             while (_status.get() == RUNNING) {
                 try {
-                    clientAddress = socket.recv(0);
-                    request = socket.recv(0);
+                    byte[] clientAddress = socket.recv(0);
+                    byte[] request = socket.recv(0);
+
                     bytesReq.write(request);
 
                     long expiry = bytesReq.readLong();
                     long reqId = bytesReq.readLong();
 
                     if (expiry >= System.currentTimeMillis()) {     // msg còn hạn sử dụng
+
                         bytesReq.read(bytesData);
 
-                        // phản hồi Snipper confirm nhận được
+                        // phản hồi Anubis confirm nhận được
                         socket.send(clientAddress, ZMQ.SNDMORE);
                         socket.send(Utils.longToBytes(reqId), 0);
 
@@ -137,23 +135,24 @@ public class Saraswati {
             socket.setHeartbeatTimeout(15000);
             socket.bind(_cfg.getTimeUrl());
 
-            byte[] clientAddress;
-            byte[] request;
             Bytes<ByteBuffer> bytesRequest = Bytes.elasticByteBuffer();     // cấu trúc ["client_time"]
-            Bytes<ByteBuffer> bytesResponse = Bytes.elasticByteBuffer();
+            Bytes<ByteBuffer> bytesResponse = Bytes.elasticByteBuffer();    // cấu trúc ["client_time"]["server_time"]
 
             while (_status.get() == RUNNING) {
                 try {
-                    clientAddress = socket.recv(0);
-                    request = socket.recv(0);
+                    byte[] clientAddress = socket.recv(0);
+                    byte[] request = socket.recv(0);
+
                     bytesRequest.write(request);
+
                     long clientTime = bytesRequest.readLong();
 
-                    // gửi cho Snipper confirm nhận được ["client_time"]["system_time"]
+                    // gửi cho Anubis confirm nhận được ["client_time"]["system_time"]
                     bytesResponse.writeLong(clientTime);
                     bytesResponse.writeLong(System.currentTimeMillis());
                     socket.send(clientAddress, ZMQ.SNDMORE);
                     socket.send(bytesResponse.toByteArray(), 0);
+
                 } catch (Exception ex) {
                     log.error("Saraswati Time Server error", ex);
                 } finally {

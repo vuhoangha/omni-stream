@@ -47,6 +47,9 @@ public class ZmqExample {
                 byte[] clientAddress = socket.recv(0);
                 byte[] request = socket.recv(0);
 
+                socket.send(clientAddress, ZMQ.SNDMORE);
+                socket.send(Utils.longToBytes(System.currentTimeMillis()), 0);
+
                 count.incrementAndGet();
             }
         }
@@ -86,7 +89,6 @@ public class ZmqExample {
 
             for (int i = 0; i < 100_000; i++) {
                 for (int j = 0; j < 500_000; j++) {
-//                    socket.send(msg.toByteArray(), ZMQ.NOBLOCK);
                     socket.send(aaa, 0);
                 }
 

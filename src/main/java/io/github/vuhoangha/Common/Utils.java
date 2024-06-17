@@ -1,15 +1,23 @@
 package io.github.vuhoangha.Common;
 
 import io.github.vuhoangha.OneToMany.Fanout;
+import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.AffinityLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.text.MessageFormat;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.locks.LockSupport;
 
+@Slf4j
 public class Utils {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(Utils.class);
@@ -155,7 +163,7 @@ public class Utils {
         long start = System.currentTimeMillis();
         task.run();
         long total = System.currentTimeMillis() - start;
-        System.out.println(MessageFormat.format("{0} exec time: {1} ms", name, total));
+        log.info("{} exec time: {} ms", name, total);
     }
 
 
@@ -178,6 +186,40 @@ public class Utils {
             }
         }
         folder.delete();
+    }
+
+    public static void deleteOldFiles(String directoryPath, long secondsOld, String endsOfFile) {
+        try {
+            Path directory = Paths.get(directoryPath);
+
+            // các file chỉnh sửa trước thời gian này sẽ bị xóa
+            Instant cutoffTime = Instant.now().minus(secondsOld, ChronoUnit.SECONDS);
+
+            // Duyệt qua các file trong thư mục
+            Files.list(directory)
+                    .filter(Files::isRegularFile) // Chỉ xét các file thông thường
+                    .filter(path -> path.toString().endsWith(endsOfFile)) // Chỉ xét các file có đuôi mong muốn
+                    .filter(path -> {
+                        try {
+                            // Kiểm tra thời gian sửa đổi cuối cùng của file
+                            Instant lastModifiedTime = Files.getLastModifiedTime(path).toInstant();
+                            return lastModifiedTime.isBefore(cutoffTime); // Xóa nếu cũ hơn cutoffTime
+                        } catch (IOException e) {
+                            log.error("Error getting last modified time for {}", path, e);
+                            return false; // Không xóa nếu có lỗi
+                        }
+                    })
+                    .forEach(path -> {
+                        try {
+                            Files.delete(path);
+                            log.info("Deleted: {}", path);
+                        } catch (IOException e) {
+                            log.info("Error deleting file {}", path, e);
+                        }
+                    });
+        } catch (Exception e) {
+            log.error("deleteOldFiles in folder {} error", directoryPath, e);
+        }
     }
 
 
