@@ -1,6 +1,8 @@
 package io.github.vuhoangha.Example.structure_example;
 
 import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.Setter;
 import net.openhft.chronicle.bytes.Bytes;
 import net.openhft.chronicle.bytes.BytesOut;
 import net.openhft.chronicle.bytes.WriteBytesMarshallable;
@@ -8,6 +10,8 @@ import net.openhft.chronicle.bytes.WriteBytesMarshallable;
 import java.nio.ByteBuffer;
 
 @AllArgsConstructor
+@Getter
+@Setter
 public class AnimalTest implements WriteBytesMarshallable {
 
     private int index;
