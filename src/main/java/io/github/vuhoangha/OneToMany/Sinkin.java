@@ -382,7 +382,7 @@ public class Sinkin {
 
                 tMsg.getQueueData().write(_byte_process_msg, 1, _byte_process_msg.readLimit() - 1);
 
-                _byte_process_msg.readByte();       // byte đầu ko cần nên bỏ
+                _byte_process_msg.readSkip(1);       // byte đầu ko cần nên bỏ
                 tMsg.setSrcIndex(_byte_process_msg.readLong());
                 tMsg.setSeq(_byte_process_msg.readLong());
                 _byte_process_msg.read(tMsg.getData(), (int) _byte_process_msg.readRemaining());
