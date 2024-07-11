@@ -53,7 +53,7 @@ public class Odin {
         _cfg = cfg;
         _status.set(RUNNING);
         _zmq_context = new ZContext();
-        _object_pool = new ConcurrentObjectPool<>(cfg.getObjectPoolSize(), OdinCacheEvent::new);
+        _object_pool = new ConcurrentObjectPool<>(new OdinCacheEvent[cfg.getObjectPoolSize()], OdinCacheEvent::new);
 
         // định kỳ xóa item quá hạn trong cache
         _remove_expiry_cache_executor.scheduleAtFixedRate(
