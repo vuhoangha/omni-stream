@@ -5,7 +5,6 @@ import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
 import io.github.vuhoangha.Common.*;
-import io.github.vuhoangha.Example.structure_example.AnimalTest;
 import io.github.vuhoangha.common.SynchronizeObjectPool;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.Affinity;
@@ -24,7 +23,6 @@ import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 
 /*
@@ -35,27 +33,29 @@ import java.util.concurrent.locks.LockSupport;
 @Slf4j
 public class Sinkin {
 
-    private final int IDLE = 0, SYNCING = 1, RUNNING = 2, STOP = 3;
-    private final AtomicInteger _status = new AtomicInteger(IDLE);
+    private enum SinkStatus {IDLE, SYNCING, RUNNING, STOP}
 
-    ScheduledExecutorService _execs_check_msg = Executors.newScheduledThreadPool(1);
-    private final NavigableMap<Long, TranspotMsg> _msg_wait = new TreeMap<>();
-    private final SynchronizeObjectPool<TranspotMsg> _transpot_msg_pool;
-    private final SinkinCfg _cfg;
-    private final SingleChronicleQueue _queue;
-    private final ExcerptAppender _appender;
-    private long _seq_in_queue;
-    private long _src_latest_index;                                                 // src index của item mới nhất trong queue
-    private final ZContext _zmq_context;
-    private final Bytes<ByteBuffer> _byte_miss_msg = Bytes.elasticByteBuffer();     // dùng để tạo data lấy msg miss
-    private final Bytes<ByteBuffer> _byte_process_msg = Bytes.elasticByteBuffer();     // dùng để tạo data xử lý msg
-    private Disruptor<SinkProcessMsg> _disruptor_process_msg;
-    private RingBuffer<SinkProcessMsg> _ring_buffer_process_msg;
-    private Disruptor<CheckMissMsg> _disruptor_miss_msg;
-    private RingBuffer<CheckMissMsg> _ring_buffer_miss_msg;
-    private SinkinMissCheckerProcessor _miss_check_processor;
-    List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
-    private final SinkinHandler _handler;
+    private SinkStatus status;                                                            // quản lý trạng thái của Sinkin
+
+    ScheduledExecutorService checkMsgExecutor = Executors.newScheduledThreadPool(1);
+    private final NavigableMap<Long, TranspotMsg> waitingMessages = new TreeMap<>();      // TODO đoạn này xem xét tự viết 1 kiểu dữ liệu tương tự nhưng performance tốt hơn
+    private final SynchronizeObjectPool<TranspotMsg> messagePool;
+    private final SinkinCfg config;
+    private final SingleChronicleQueue chronicleQueue;
+    private final ExcerptAppender chronicleAppender;
+    private long latestWriteSequence;                                                     // số thứ tự của msg trong queue. Được đánh bởi bên Fanout
+    private long latestWriteIndex;                                                        // src index của item mới nhất trong queue
+    private final ZContext zmqContext;
+    private final Bytes<ByteBuffer> missMsgBytes = Bytes.elasticByteBuffer();             // dùng để tạo data lấy msg miss
+    private final Bytes<ByteBuffer> processMsgBytes = Bytes.elasticByteBuffer();          // dùng để tạo data xử lý msg
+    private Disruptor<SinkProcessMsg> processMsgDisruptor;
+    private RingBuffer<SinkProcessMsg> processMsgRingBuffer;
+    private Disruptor<CheckMissMsg> missMsgDisruptor;
+    private RingBuffer<CheckMissMsg> missMsgRingBuffer;
+    private SinkinMissCheckerProcessor missCheckerProcessor;
+    List<AffinityCompose> affinityComposes = Collections.synchronizedList(new ArrayList<>());
+    private final SinkinHandler messageHandler;
+    private long endSyncedSeq = -1;                                                       // sequence kết thúc việc đồng bộ dữ liệu ban đầu từ Fanout
 
 
     public Sinkin(SinkinCfg cfg, SinkinHandler handler) {
@@ -65,41 +65,39 @@ public class Sinkin {
         Utils.checkNull(handler, "Require handler");
         Utils.checkNull(cfg.getReaderName(), "Require readerName");
 
-        _cfg = cfg;
-        _handler = handler;
+        config = cfg;
+        messageHandler = handler;
+        messagePool = new SynchronizeObjectPool<>(new TranspotMsg[cfg.getMaxObjectsPoolWait()], TranspotMsg::new);
+        zmqContext = new ZContext();
 
-        _transpot_msg_pool = new SynchronizeObjectPool<>(new TranspotMsg[cfg.getMaxObjectsPoolWait()], TranspotMsg::new);
-        _zmq_context = new ZContext();
-
-        _queue = SingleChronicleQueueBuilder
-                .binary(_cfg.getQueuePath())
-                .rollCycle(_cfg.getRollCycles())
+        chronicleQueue = SingleChronicleQueueBuilder
+                .binary(config.getQueuePath())
+                .rollCycle(config.getRollCycles())
                 .build();
-        _appender = _queue.acquireAppender();
-        LongLongObject lastestInfo = _getLatestInfo();
+        chronicleAppender = chronicleQueue.acquireAppender();
+
+        LongLongObject lastestInfo = getLatestInfo();
+
         if (lastestInfo != null) {
-            _src_latest_index = lastestInfo.valueA;
-            if (lastestInfo.valueB != _queue.entryCount()) {
-                throw new RuntimeException(MessageFormat.format("Sequence in queue not match, latestInfo {0}, entryCount {1}", lastestInfo.valueB, _queue.entryCount()));
+            latestWriteIndex = lastestInfo.valueA;
+            if (lastestInfo.valueB != chronicleQueue.entryCount()) {
+                throw new RuntimeException(MessageFormat.format("Sequence in queue not match, latestInfo {0}, entryCount {1}", lastestInfo.valueB, chronicleQueue.entryCount()));
             } else {
-                _seq_in_queue = _queue.entryCount();   // tổng số item trong queue
+                latestWriteSequence = chronicleQueue.entryCount();   // tổng số item trong queue
             }
         } else {
-            _src_latest_index = -1;
-            _seq_in_queue = 0;
+            latestWriteIndex = -1;
+            latestWriteSequence = 0;
         }
 
-        _status.set(SYNCING);
-
-        // bắt đầu lắng nghe việc ghi vào queue
-        new Thread(this::_onWriteQueue).start();
-        LockSupport.parkNanos(1_000_000_000L);
+        status = SinkStatus.SYNCING;
+        LockSupport.parkNanos(100_000_000L);
 
         // chạy đồng bộ dữ liệu với source trước
-        new Thread(this::_sync).start();
+        new Thread(this::sync).start();
 
         // được chạy khi JVM bắt đầu quá trình shutdown
-        Runtime.getRuntime().addShutdownHook(new Thread(this::_onShutdown));
+        Runtime.getRuntime().addShutdownHook(new Thread(this::onShutdown));
     }
 
 
@@ -109,30 +107,27 @@ public class Sinkin {
      * Cấu trúc response: ["msg_1"]["msg_2"]...vvv
      * cấu trúc từng msg con msg_1, msg_2..vv:  ["độ dài data 1]["source native index 1"]["sequence 1"]["data nén 1"]["độ dài data 2]["source native index 2"]["sequence 2"]["data nén 2"]
      */
-    private void _sync() {
-        ZMQ.Socket socket = _zmq_context.createSocket(SocketType.REQ);
-        socket.connect(_cfg.getConfirmUrl());
+    private void sync() {
+        ZMQ.Socket socket = zmqContext.createSocket(SocketType.REQ);
+        socket.connect(config.getConfirmUrl());
 
-        ExcerptAppender localAppender = _queue.acquireAppender();
-        Bytes<ByteBuffer> byteRes = Bytes.elasticByteBuffer();   // chứa byte[] của tất cả bản ghi trả về
-        Bytes<ByteBuffer> byteToQueue = Bytes.elasticByteBuffer();   // chứa byte[] để ghi vào queue
+        ExcerptAppender localAppender = chronicleQueue.acquireAppender();
+        Bytes<ByteBuffer> byteRes = Bytes.elasticByteBuffer();              // chứa byte[] của tất cả bản ghi trả về
+        Bytes<ByteBuffer> byteToQueue = Bytes.elasticByteBuffer();          // chứa byte[] để ghi vào queue
 
         try {
-            while (_status.get() == SYNCING) {
+            while (status == SinkStatus.SYNCING) {
                 // tổng hợp data rồi req sang src
-                _byte_miss_msg.writeByte(Constance.FANOUT.CONFIRM.FROM_LATEST);
-                _byte_miss_msg.writeLong(_src_latest_index);
-                socket.send(_byte_miss_msg.toByteArray(), 0);
-                _byte_miss_msg.clear();
+                missMsgBytes.writeByte(Constance.FANOUT.CONFIRM.FROM_LATEST);
+                missMsgBytes.writeLong(latestWriteIndex);
+                socket.send(missMsgBytes.toByteArray(), 0);
+                missMsgBytes.clear();
 
                 // chờ dữ liệu trả về
                 byte[] repData = socket.recv(0);
 
                 // nếu đã hết msg thì thôi
-                if (repData.length == 0) {
-                    log.info("Sinkin synced");
-                    break;
-                }
+                if (repData.length == 0) break;
 
                 log.info("Sinkin syncing......");
 
@@ -152,14 +147,14 @@ public class Sinkin {
                     long seq = byteRes.readLong();
                     byteRes.readSkip(dataLen);              // bỏ qua data chính
 
-                    if (seq != _seq_in_queue + 1) {
-                        log.error("Sinkin _sync not sequence, src_seq: {}, sink_seq: {}", seq, _seq_in_queue);
+                    if (seq != latestWriteSequence + 1) {
+                        log.error("Sinkin _sync not sequence, src_seq: {}, sink_seq: {}", seq, latestWriteSequence);
                         return;
                     }
 
                     // update seq và native index
-                    _seq_in_queue++;
-                    _src_latest_index = srcIndex;
+                    latestWriteSequence = seq;
+                    latestWriteIndex = srcIndex;
 
                     // write to queue
                     localAppender.writeBytes(byteToQueue);
@@ -171,18 +166,22 @@ public class Sinkin {
                 byteRes.clear();
             }
 
-            _status.set(RUNNING);
+            log.info("Sinkin synced");
+
+            endSyncedSeq = latestWriteSequence;
+            status = SinkStatus.RUNNING;
+            LockSupport.parkNanos(100_000_000L);
 
             // khởi tạo luồng chính
-            _affinity_composes.add(
+            affinityComposes.add(
                     Utils.runWithThreadAffinity(
                             "Sinkin ALL",
                             true,
-                            _cfg.getEnableBindingCore(),
-                            _cfg.getCpu(),
-                            _cfg.getEnableBindingCore(),
-                            _cfg.getCpu(),
-                            this::_mainProcess));
+                            config.getEnableBindingCore(),
+                            config.getCpu(),
+                            config.getEnableBindingCore(),
+                            config.getCpu(),
+                            this::mainProcess));
         } catch (Exception ex) {
             log.error("Sinkin sync error", ex);
         } finally {
@@ -197,41 +196,46 @@ public class Sinkin {
     }
 
 
-    private void _mainProcess() {
+    // luồng xử lý logic chính sau khi đã đồng bộ dữ liệu xong
+    private void mainProcess() {
+
         log.info("Sinkin run main flow on logical processor {}", Affinity.getCpu());
 
         // khởi tạo disruptor xử lý các msg chính
-        _affinity_composes.add(
+        affinityComposes.add(
                 Utils.runWithThreadAffinity(
                         "Sinkin Disruptor Process Msg",
                         false,
-                        _cfg.getEnableBindingCore(),
-                        _cfg.getCpu(),
-                        _cfg.getEnableDisruptorProcessMsgBindingCore(),
-                        _cfg.getDisruptorProcessMsgCpu(),
-                        this::_initDisruptorProcessMsg));
+                        config.getEnableBindingCore(),
+                        config.getCpu(),
+                        config.getEnableDisruptorProcessMsgBindingCore(),
+                        config.getDisruptorProcessMsgCpu(),
+                        this::initDisruptorProcessMsg));
 
-        // Control miss msg and subscribe queue
-        _affinity_composes.add(
-                Utils.runWithThreadAffinity(
-                        "Sinkin Check Miss Msg And Sub Queue",
-                        false,
-                        _cfg.getEnableBindingCore(),
-                        _cfg.getCpu(),
-                        _cfg.getEnableCheckMissMsgAndSubQueueBindingCore(),
-                        _cfg.getCheckMissMsgAndSubQueueCpu(),
-                        this::_initCheckMissMsg));
+        // định kỳ kiểm tra các msg bị miss hoặc chờ quá lâu không
+        this.initCheckMissMsg();
 
-        // Control miss msg and subscribe queue
-        _affinity_composes.add(
+        // lắng nghe các msg được ghi vào queue và chuyển nó tới ứng dụng
+        affinityComposes.add(
                 Utils.runWithThreadAffinity(
-                        "Sinkin Subscribe Msg",
+                        "Sinkin Sub Queue",
                         false,
-                        _cfg.getEnableBindingCore(),
-                        _cfg.getCpu(),
-                        _cfg.getEnableSubMsgBindingCore(),
-                        _cfg.getSubMsgCpu(),
-                        () -> new Thread(this::_subMsg).start()));
+                        config.getEnableBindingCore(),
+                        config.getCpu(),
+                        config.getEnableCheckMissMsgAndSubQueueBindingCore(),
+                        config.getCheckMissMsgAndSubQueueCpu(),
+                        () -> new Thread(this::onWriteQueue).start()));
+
+        // lắng nghe các msg Fanout gửi sang và đẩy vào xử lý rồi lưu vào queue
+        affinityComposes.add(
+                Utils.runWithThreadAffinity(
+                        "Sinkin Sub Msg",
+                        false,
+                        config.getEnableBindingCore(),
+                        config.getCpu(),
+                        config.getEnableSubMsgBindingCore(),
+                        config.getSubMsgCpu(),
+                        () -> new Thread(this::subMsg).start()));
     }
 
 
@@ -243,57 +247,56 @@ public class Sinkin {
      * các miss msg
      * các yêu cầu check miss msg
      */
-    private void _initDisruptorProcessMsg() {
+    private void initDisruptorProcessMsg() {
         log.info("Sinkin run disruptor process msg on logical processor {}", Affinity.getCpu());
 
-        _disruptor_process_msg = new Disruptor<>(
+        processMsgDisruptor = new Disruptor<>(
                 SinkProcessMsg::new,
-                _cfg.getRingBufferSize(),
+                config.getRingBufferSize(),
                 Executors.newSingleThreadExecutor(),
                 ProducerType.MULTI,
-                _cfg.getWaitStrategy());
-        _disruptor_process_msg.handleEventsWith((event, sequence, endOfBatch) -> this._onMsg(event));
-        _disruptor_process_msg.start();
-        _ring_buffer_process_msg = _disruptor_process_msg.getRingBuffer();
+                config.getWaitStrategy());
+        processMsgDisruptor.handleEventsWith((event, sequence, endOfBatch) -> this.onMsg(event));
+        processMsgDisruptor.start();
+        processMsgRingBuffer = processMsgDisruptor.getRingBuffer();
     }
 
 
     /**
      * Check các msg bị miss
      */
-    private void _initCheckMissMsg() {
-        log.info("Sinkin run check miss msg and subscribe queue on logical processor {}", Affinity.getCpu());
+    private void initCheckMissMsg() {
 
         /*
          * Check xem có msg nào bị miss ko
          * Có 2 chế độ là "lấy msg mới nhất" và "lấy msg nằm giữa 2 index"
          */
-        _disruptor_miss_msg = new Disruptor<>(
+        missMsgDisruptor = new Disruptor<>(
                 CheckMissMsg::new,
                 2 << 7,    // 256
                 Executors.newSingleThreadExecutor(),
                 ProducerType.MULTI,
                 new BlockingWaitStrategy());
-        _disruptor_miss_msg.start();
-        _ring_buffer_miss_msg = _disruptor_miss_msg.getRingBuffer();
+        missMsgDisruptor.start();
+        missMsgRingBuffer = missMsgDisruptor.getRingBuffer();
 
         // lắng nghe các yêu cầu lấy msg bị miss
-        _miss_check_processor = new SinkinMissCheckerProcessor(
-                _ring_buffer_miss_msg,
-                _ring_buffer_miss_msg.newBarrier(),
-                _zmq_context,
-                _cfg.getConfirmUrl(),
-                _cfg.getTimeoutSendReqMissMsg(),
-                _cfg.getTimeoutRecvReqMissMsg(),
-                this::_onMissMsgReq);
-        new Thread(_miss_check_processor).start();
+        missCheckerProcessor = new SinkinMissCheckerProcessor(
+                missMsgRingBuffer,
+                missMsgRingBuffer.newBarrier(),
+                zmqContext,
+                config.getConfirmUrl(),
+                config.getTimeoutSendReqMissMsg(),
+                config.getTimeoutRecvReqMissMsg(),
+                this::onMissMsgReq);
+        new Thread(missCheckerProcessor).start();
 
         /*
          * định kỳ check xem có msg mới ko
          * định kỳ check xem msg trong hàng đợi có chờ quá lâu ko
          */
-        _execs_check_msg.scheduleAtFixedRate(this::_checkLatestMsg, 1000, _cfg.getTimeRateGetLatestMsgMS(), TimeUnit.MILLISECONDS);
-        _execs_check_msg.scheduleAtFixedRate(this::_checkLongTimeMsg, 10, _cfg.getTimeRateGetMissMsgMS(), TimeUnit.MILLISECONDS);
+        checkMsgExecutor.scheduleAtFixedRate(this::checkLatestMsg, 1000, config.getTimeRateGetLatestMsgMS(), TimeUnit.MILLISECONDS);
+        checkMsgExecutor.scheduleAtFixedRate(this::checkLongTimeMsg, 10, config.getTimeRateGetMissMsgMS(), TimeUnit.MILLISECONDS);
     }
 
 
@@ -304,8 +307,8 @@ public class Sinkin {
      * nếu là bản ghi xa hơn nữa thì để vào trong hàng chờ
      * nếu lâu quá chưa được xử lý thì sẽ có "checkLongTimeMsg" định kỳ check để lấy ra xử lý
      */
-    private void _checkLatestMsg() {
-        _ring_buffer_miss_msg.publishEvent(
+    private void checkLatestMsg() {
+        missMsgRingBuffer.publishEvent(
                 (newEvent, sequence, __type) -> newEvent.setType(__type),
                 Constance.FANOUT.CONFIRM.LATEST_MSG);
     }
@@ -314,8 +317,8 @@ public class Sinkin {
     /**
      * đẩy vào trong luồng xử lý msg chính để lấy ra các msg đã vào nhưng lâu được xử lý
      */
-    private void _checkLongTimeMsg() {
-        _ring_buffer_process_msg.publishEvent(
+    private void checkLongTimeMsg() {
+        processMsgRingBuffer.publishEvent(
                 (newEvent, sequence, __type) -> newEvent.setType(__type),
                 Constance.SINKIN.PROCESS_MSG_TYPE.CHECK_MISS);
     }
@@ -324,11 +327,11 @@ public class Sinkin {
     /**
      * Sub các msg được src stream sang
      */
-    private void _subMsg() {
+    private void subMsg() {
         log.info("Sinkin run subscribe msg on logical processor {}", Affinity.getCpu());
 
-        ZMQ.Socket subscriber = _zmq_context.createSocket(SocketType.SUB);
-        subscriber.setRcvHWM(_cfg.getZmqSubBufferSize());   // setting buffer size các msg được nhận
+        ZMQ.Socket subscriber = zmqContext.createSocket(SocketType.SUB);
+        subscriber.setRcvHWM(config.getZmqSubBufferSize());   // setting buffer size các msg được nhận
 
         /*
          * setHeartbeatIvl: interval gửi heartbeat
@@ -343,16 +346,16 @@ public class Sinkin {
         subscriber.setReconnectIVL(10000);
         subscriber.setReconnectIVLMax(10000);
 
-        subscriber.connect(_cfg.getRealTimeUrl());
+        subscriber.connect(config.getRealTimeUrl());
         subscriber.subscribe(ZMQ.SUBSCRIPTION_ALL);     // nhận tất cả tin nhắn từ publisher
 
         log.info("Sinkin start subscribe");
 
         // Nhận và xử lý tin nhắn
-        while (_status.get() == RUNNING) {
+        while (status == SinkStatus.RUNNING) {
             try {
                 byte[] msg = subscriber.recv(0);
-                _ring_buffer_process_msg.publishEvent(
+                processMsgRingBuffer.publishEvent(
                         (newEvent, sequence, __bytesData) -> newEvent.setType(__bytesData[0]).setData(__bytesData),     // vì byte đầu tiên luôn là type nên ta lấy luôn
                         msg);
             } catch (Exception ex) {
@@ -371,59 +374,59 @@ public class Sinkin {
      * các miss msg
      * các yêu cầu check miss msg
      */
-    private void _onMsg(SinkProcessMsg event) {
+    private void onMsg(SinkProcessMsg event) {
         try {
             if (event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.MSG) {
                 // chỉ có 1 msg duy nhất. Cấu trúc ["msg type"]["source native index"]["seq in queue"]["data"]
 
-                _byte_process_msg.write(event.getData());
+                processMsgBytes.write(event.getData());
 
-                TranspotMsg tMsg = _transpot_msg_pool.pop();
+                TranspotMsg tMsg = messagePool.pop();
 
-                tMsg.getQueueData().write(_byte_process_msg, 1, _byte_process_msg.readLimit() - 1);
+                tMsg.getQueueData().write(processMsgBytes, 1, processMsgBytes.readLimit() - 1);
 
-                _byte_process_msg.readSkip(1);       // byte đầu ko cần nên bỏ
-                tMsg.setSrcIndex(_byte_process_msg.readLong());
-                tMsg.setSeq(_byte_process_msg.readLong());
-                _byte_process_msg.read(tMsg.getData(), (int) _byte_process_msg.readRemaining());
+                processMsgBytes.readSkip(1);       // byte đầu ko cần nên bỏ
+                tMsg.setSrcIndex(processMsgBytes.readLong());
+                tMsg.setSeq(processMsgBytes.readLong());
+                processMsgBytes.read(tMsg.getData(), (int) processMsgBytes.readRemaining());
 
-                _processOneMsg(tMsg);
+                processOneMsg(tMsg);
 
-                _byte_process_msg.clear();
+                processMsgBytes.clear();
             } else if (event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.MULTI_MSG) {
                 // có thể có nhiều msg
 
-                _byte_process_msg.write(event.getData());
+                processMsgBytes.write(event.getData());
 
                 // đọc cho tới khi nào hết data thì thôi
-                while (_byte_process_msg.readRemaining() > 0) {
-                    TranspotMsg tMsg = _transpot_msg_pool.pop();
+                while (processMsgBytes.readRemaining() > 0) {
+                    TranspotMsg tMsg = messagePool.pop();
 
                     // Cấu trúc: ["độ dài data 1"]["source native index 1"]["seq in queue 1"]["data 1"]["độ dài data 2"]["source native index 2"]["seq in queue 2"]["data 2"]
-                    int dataLen = _byte_process_msg.readInt();
-                    tMsg.getQueueData().write(_byte_process_msg, _byte_process_msg.readPosition(), 8 + 8 + dataLen);    // đọc nhưng ko ảnh hưởng readPosition trong _byte_process_msg
-                    tMsg.setSrcIndex(_byte_process_msg.readLong());
-                    tMsg.setSeq(_byte_process_msg.readLong());
-                    _byte_process_msg.read(tMsg.getData(), dataLen);
+                    int dataLen = processMsgBytes.readInt();
+                    tMsg.getQueueData().write(processMsgBytes, processMsgBytes.readPosition(), 8 + 8 + dataLen);    // đọc nhưng ko ảnh hưởng readPosition trong _byte_process_msg
+                    tMsg.setSrcIndex(processMsgBytes.readLong());
+                    tMsg.setSeq(processMsgBytes.readLong());
+                    processMsgBytes.read(tMsg.getData(), dataLen);
 
-                    _processOneMsg(tMsg);
+                    processOneMsg(tMsg);
                 }
 
-                _byte_process_msg.clear();
+                processMsgBytes.clear();
             } else if (event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.CHECK_MISS) {
                 // nếu hàng chờ còn msg và nó đã chờ quá lâu --> lấy các msg miss ở giữa
                 // nếu ko có msg chờ thì bỏ qua
-                if (!_msg_wait.isEmpty()) {
-                    TranspotMsg tMsg = _msg_wait.firstEntry().getValue();
-                    if (tMsg.getRcvTime() + _cfg.getMaxTimeWaitMS() < System.currentTimeMillis()) {
-                        _ring_buffer_miss_msg.publishEvent(
+                if (!waitingMessages.isEmpty()) {
+                    TranspotMsg tMsg = waitingMessages.firstEntry().getValue();
+                    if (tMsg.getRcvTime() + config.getMaxTimeWaitMS() < System.currentTimeMillis()) {
+                        missMsgRingBuffer.publishEvent(
                                 (newEvent, sequence, __type, __indexFrom, __indexTo) -> {
                                     newEvent.setType(__type);
                                     newEvent.setIndexFrom(__indexFrom);
                                     newEvent.setIndexTo(__indexTo);
                                 },
                                 Constance.FANOUT.CONFIRM.FROM_TO,
-                                _src_latest_index,
+                                latestWriteIndex,
                                 tMsg.getSrcIndex());
                     }
                 }
@@ -431,18 +434,18 @@ public class Sinkin {
 
             // check xem trong hàng đợi có msg kế tiếp không ?
             if (event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.MSG || event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.MULTI_MSG) {
-                while (!_msg_wait.isEmpty() && _msg_wait.firstKey() <= _seq_in_queue + 1) {
-                    long firstKey = _msg_wait.firstKey();
-                    TranspotMsg tMsg = _msg_wait.remove(firstKey);      // lấy msg chờ và xóa khỏi hàng chờ
-                    if (firstKey == _seq_in_queue + 1) {
-                        _seq_in_queue++;
-                        _src_latest_index = tMsg.getSrcIndex();
-                        _appender.writeBytes(tMsg.getQueueData());                           // ghi vào queue
+                while (!waitingMessages.isEmpty() && waitingMessages.firstKey() <= latestWriteSequence + 1) {
+                    long firstKey = waitingMessages.firstKey();
+                    TranspotMsg tMsg = waitingMessages.remove(firstKey);      // lấy msg chờ và xóa khỏi hàng chờ
+                    if (firstKey == latestWriteSequence + 1) {
+                        latestWriteSequence = tMsg.getSeq();
+                        latestWriteIndex = tMsg.getSrcIndex();
+                        chronicleAppender.writeBytes(tMsg.getQueueData());                           // ghi vào queue
                     }
 
                     // clear data và trả về pool
                     tMsg.clear();
-                    _transpot_msg_pool.push(tMsg);
+                    messagePool.push(tMsg);
                 }
             }
         } catch (Exception ex) {
@@ -452,30 +455,30 @@ public class Sinkin {
 
 
     // xử lý 1 msg hoàn chỉnh
-    private void _processOneMsg(TranspotMsg tMsg) {
+    private void processOneMsg(TranspotMsg tMsg) {
         try {
-            if (tMsg.getSeq() <= _seq_in_queue) {
+            if (tMsg.getSeq() <= latestWriteSequence) {
                 // msg đã xử lý thì bỏ qua
                 // trả về pool
                 tMsg.clear();
-                _transpot_msg_pool.push(tMsg);
-            } else if (tMsg.getSeq() == _seq_in_queue + 1) {
+                messagePool.push(tMsg);
+            } else if (tMsg.getSeq() == latestWriteSequence + 1) {
                 // nếu là msg tiếp theo --> ghi vào trong queue
-                _seq_in_queue++;
-                _src_latest_index = tMsg.getSrcIndex();
-                _appender.writeBytes(tMsg.getQueueData());
+                latestWriteSequence = tMsg.getSeq();
+                latestWriteIndex = tMsg.getSrcIndex();
+                chronicleAppender.writeBytes(tMsg.getQueueData());
                 // trả về pool
                 tMsg.clear();
-                _transpot_msg_pool.push(tMsg);
+                messagePool.push(tMsg);
             } else {
                 // msg lớn hơn "current + 1" thì đẩy vào trong hệ thống chờ kèm thời gian
                 tMsg.setRcvTime(System.currentTimeMillis());
-                _msg_wait.put(tMsg.getSeq(), tMsg);
+                waitingMessages.put(tMsg.getSeq(), tMsg);
             }
         } catch (Exception ex) {
             // trả về pool
             tMsg.clear();
-            _transpot_msg_pool.push(tMsg);
+            messagePool.push(tMsg);
             log.error("Sinkin ProcessOneMsg error", ex);
         }
     }
@@ -486,18 +489,18 @@ public class Sinkin {
      * xử lý các yêu cầu lấy msg bị miss từ [index_from, index_to]
      * trả về "true" nếu việc gửi/nhận thành công và ngược lại
      */
-    private boolean _onMissMsgReq(ZMQ.Socket _zSocket, CheckMissMsg msg) {
+    private boolean onMissMsgReq(ZMQ.Socket _zSocket, CheckMissMsg msg) {
         try {
             boolean isSuccess = true;
 
             if (msg.getType() == Constance.FANOUT.CONFIRM.LATEST_MSG) {
                 // nếu lấy msg cuối cùng
 
-                _byte_miss_msg.writeByte(Constance.FANOUT.CONFIRM.LATEST_MSG);
+                missMsgBytes.writeByte(Constance.FANOUT.CONFIRM.LATEST_MSG);
 
                 // gửi đi
-                isSuccess = _zSocket.send(_byte_miss_msg.toByteArray());
-                _byte_miss_msg.clear();
+                isSuccess = _zSocket.send(missMsgBytes.toByteArray());
+                missMsgBytes.clear();
 
                 if (!isSuccess) {
                     // ko gửi được msg
@@ -511,7 +514,7 @@ public class Sinkin {
                         log.error("Rep latest msg empty. Maybe TIMEOUT !");
                         isSuccess = false;
                     } else if (resData.length > 0) {
-                        _ring_buffer_process_msg.publishEvent(
+                        processMsgRingBuffer.publishEvent(
                                 (newEvent, sequence, __bytesData) -> newEvent.setType(__bytesData[0]).setData(__bytesData),
                                 resData);
                     }
@@ -519,13 +522,13 @@ public class Sinkin {
             } else if (msg.getType() == Constance.FANOUT.CONFIRM.FROM_TO) {
                 // nếu lấy các bản ghi from-to index
 
-                _byte_miss_msg.writeByte(Constance.FANOUT.CONFIRM.FROM_TO);
-                _byte_miss_msg.writeLong(msg.getIndexFrom());
-                _byte_miss_msg.writeLong(msg.getIndexTo());
+                missMsgBytes.writeByte(Constance.FANOUT.CONFIRM.FROM_TO);
+                missMsgBytes.writeLong(msg.getIndexFrom());
+                missMsgBytes.writeLong(msg.getIndexTo());
 
                 // gửi đi
-                isSuccess = _zSocket.send(_byte_miss_msg.toByteArray());
-                _byte_miss_msg.clear();
+                isSuccess = _zSocket.send(missMsgBytes.toByteArray());
+                missMsgBytes.clear();
 
                 if (!isSuccess) {
                     // ko gửi được msg
@@ -537,7 +540,7 @@ public class Sinkin {
                         log.error(MessageFormat.format("Rep items from {0} - to {1} fail. Maybe TIMEOUT !", msg.getIndexFrom(), msg.getIndexTo()));
                         isSuccess = false;
                     } else if (resData.length > 0) {
-                        _ring_buffer_process_msg.publishEvent(
+                        processMsgRingBuffer.publishEvent(
                                 (newEvent, sequence, __type, __bytesData) -> newEvent.setType(__type).setData(__bytesData),
                                 Constance.SINKIN.PROCESS_MSG_TYPE.MULTI_MSG, resData);
                     }
@@ -558,13 +561,13 @@ public class Sinkin {
      * valueA: src native index
      * valueB: sequence
      */
-    private LongLongObject _getLatestInfo() {
+    private LongLongObject getLatestInfo() {
         try {
-            if (_queue.lastIndex() >= 0) {
+            if (chronicleQueue.lastIndex() >= 0) {
                 Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
 
-                ExcerptTailer tailer = _queue.createTailer();
-                tailer.moveToIndex(_queue.lastIndex());
+                ExcerptTailer tailer = chronicleQueue.createTailer();
+                tailer.moveToIndex(chronicleQueue.lastIndex());
                 tailer.readBytes(bytes);
 
                 LongLongObject result = new LongLongObject(bytes.readLong(), bytes.readLong());
@@ -572,60 +575,62 @@ public class Sinkin {
                 bytes.releaseLast();
 
                 return result;
-            } else {
-                return null;
             }
         } catch (Exception ex) {
             log.error("Sinkin GetLatestIndex error", ex);
-            return null;
         }
+        return null;
     }
 
 
     /**
      * lắng nghe các event được viết vào queue và call cho "Handler"
      */
-    private void _onWriteQueue() {
+    private void onWriteQueue() {
+
+        log.info("Sinkin listen queue on logical processor {}", Affinity.getCpu());
 
         Bytes<ByteBuffer> bytesRead = Bytes.elasticByteBuffer();
         Bytes<ByteBuffer> bytesDecompress = Bytes.elasticByteBuffer();
         Bytes<ByteBuffer> bytesData = Bytes.elasticByteBuffer();
 
         // tạo 1 tailer. Mặc định nó sẽ đọc từ lần cuối cùng nó đọc
-        ExcerptTailer tailer = _queue.createTailer(_cfg.getReaderName());
-        if (_cfg.getStartId() == -1) {
+        ExcerptTailer tailer = chronicleQueue.createTailer(config.getReaderName());
+        if (config.getStartId() == -1) {
+
             // nếu có yêu cầu replay từ đầu queue
             tailer.toStart();
-        } else if (_cfg.getStartId() >= 0) {
+        } else if (config.getStartId() >= 0) {
+
             // vì khi dùng hàm "moveToIndex" thì lần đọc tiếp theo là chính bản ghi có index đó
             //      --> phải đọc trước 1 lần để tăng con trỏ đọc lên
-            if (tailer.moveToIndex(_cfg.getStartId())) {
+            if (tailer.moveToIndex(config.getStartId())) {
                 tailer.readBytes(bytesRead);
                 bytesRead.clear();
             } else {
-                log.error("Collection tailer fail because invalid index {}", _cfg.getStartId());
+                log.error("Collection tailer fail because invalid index {}", config.getStartId());
             }
         }
 
-        Runnable waiter = OmniWaitStrategy.getWaiter(_cfg.getQueueWaitStrategy());
+        Runnable waiter = OmniWaitStrategy.getWaiter(config.getQueueWaitStrategy());
 
-        while (_status.get() == RUNNING || _status.get() == SYNCING) {
+        while (status == SinkStatus.RUNNING || status == SinkStatus.SYNCING) {
             try {
                 if (tailer.readBytes(bytesRead)) {
                     bytesRead.readSkip(8);      // bỏ qua src index
                     long seq = bytesRead.readLong();
 
-                    if (_cfg.getCompress()) {
+                    if (config.getCompress()) {
                         // giải nén
                         byte[] compressedBytes = new byte[(int) bytesRead.readRemaining()];
                         bytesRead.read(compressedBytes); // Đọc toàn bộ dữ liệu nén của msg này
                         byte[] decompressData = Lz4Compressor.decompressData(compressedBytes);
                         bytesDecompress.write(decompressData);
 
-                        _handler.apply(tailer.lastReadIndex(), seq, bytesDecompress);
+                        messageHandler.apply(tailer.lastReadIndex(), seq, endSyncedSeq, bytesDecompress);
                     } else {
                         bytesRead.read(bytesData, (int) bytesRead.readRemaining());
-                        _handler.apply(tailer.lastReadIndex(), seq, bytesData);
+                        messageHandler.apply(tailer.lastReadIndex(), seq, endSyncedSeq, bytesData);
                     }
 
                     bytesRead.clear();
@@ -655,37 +660,37 @@ public class Sinkin {
      * Lần lượt shutdown và giải phóng tài nguyên theo thứ tự từ đầu vào --> đầu ra
      * các công việc đang làm dở sẽ làm nốt cho xong
      */
-    private void _onShutdown() {
+    private void onShutdown() {
         log.info("Sinkin closing...");
 
-        _status.set(STOP);
+        status = SinkStatus.STOP;
         LockSupport.parkNanos(500_000_000);
 
         // close zeromq, ngừng nhận msg mới
-        _zmq_context.destroy();
+        zmqContext.destroy();
 
         // turnoff miss check processor, ngừng việc lấy các msg thiếu và msg mới nhất
-        _execs_check_msg.shutdownNow();
-        _miss_check_processor.halt();
-        _disruptor_miss_msg.shutdown();
+        checkMsgExecutor.shutdownNow();
+        missCheckerProcessor.halt();
+        missMsgDisruptor.shutdown();
 
         // close disruptor, ngừng nhận msg mới, xử lý nốt msg trong ring_buffer
-        _disruptor_process_msg.shutdown();
+        processMsgDisruptor.shutdown();
         // ngừng 2s để xử lý nốt msg trong ring buffer
         LockSupport.parkNanos(1_000_000_000);
 
         // close chronicle queue
-        _appender.close();
-        _queue.close();
+        chronicleAppender.close();
+        chronicleQueue.close();
 
         // object pool
-        _transpot_msg_pool.clear();
+        messagePool.clear();
 
         // byte
-        _byte_miss_msg.releaseLast();
+        missMsgBytes.releaseLast();
 
         // giải phóng các CPU core / Logical processor đã sử dụng
-        for (AffinityCompose affinityCompose : _affinity_composes) {
+        for (AffinityCompose affinityCompose : affinityComposes) {
             affinityCompose.release();
         }
 

@@ -100,12 +100,13 @@ public class OneToManyExample {
             }
         }).start();
 
-        SinkinHandler handler = (long localIndex, long sequence, Bytes<ByteBuffer> data) -> {
+        SinkinHandler handler = (long localIndex, long currentSeq, long endSyncedSeq, Bytes<ByteBuffer> data) -> {
             count.incrementAndGet();
 
             System.out.println("\uD83D\uDCE9Received");
             System.out.println("LocalIndex: " + localIndex);
-            System.out.println("Sequence: " + sequence);
+            System.out.println("currentSeq: " + currentSeq);
+            System.out.println("endSyncedSeq: " + endSyncedSeq);
 
             AnimalTest animalTest = new AnimalTest(data);
             System.out.println("Animal: " + animalTest);
