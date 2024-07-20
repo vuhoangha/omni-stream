@@ -141,8 +141,8 @@ public class Fanout {
 
         ExcerptTailer tailer = _queue.createTailer();
 
-        try {
-            while (_status.get() == RUNNING) {
+        while (_status.get() == RUNNING) {
+            try {
                 byteInput.write(repSocket.recv(0));
 
                 byte type = byteInput.readByte();
@@ -226,18 +226,18 @@ public class Fanout {
                     byteReplies.clear();
                 }
                 byteInput.clear();
+            } catch (Exception ex) {
+                log.error("Fanout handle confirm request error", ex);
             }
-        } catch (Exception ex) {
-            log.error("Fanout handle confirm request error", ex);
-        } finally {
-            tailer.close();
-            repSocket.close();
-            byteRead.releaseLast();
-            byteInput.releaseLast();
-            byteReplies.releaseLast();
-
-            log.info("Fanout closing listen request confirm");
         }
+
+        tailer.close();
+        repSocket.close();
+        byteRead.releaseLast();
+        byteInput.releaseLast();
+        byteReplies.releaseLast();
+
+        log.info("Fanout closing listen request confirm");
     }
 
 
