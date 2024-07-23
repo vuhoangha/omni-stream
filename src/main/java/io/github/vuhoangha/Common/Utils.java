@@ -84,54 +84,66 @@ public class Utils {
     /**
      * Chạy 1 function trên CPU core / Logical processor
      *
-     * @param name                      tên của logic code này
-     * @param isMainFlow                đây có phải là luồng chính hay ko
-     * @param processBindingCore        luồng chính có gắn vào 1 CPU core ko
-     * @param processCpu                luồng chính có gắn vào logical processor nào ko
-     * @param enableSpecificBindingCore luồng phụ có gắn vào 1 CPU core ko
-     * @param cpu                       luồng phụ có gắn vào logical processor nào ko
-     * @param coreFunc                  logic code cần chạy
+     * @param taskName                  tên của logic code này
+     * @param isMainTask                đây có phải là luồng chính hay ko
+     * @param bindMainTaskToCore        luồng chính có gắn vào 1 CPU core ko
+     * @param mainTaskCpu               luồng chính có gắn vào logical processor nào ko
+     * @param bindSubTaskToCore         luồng phụ có gắn vào 1 CPU core ko
+     * @param subTaskCpu                luồng phụ có gắn vào logical processor nào ko
+     * @param task                      logic code cần chạy
      * @return chứa lock và thread chạy luồng này
      */
     public static AffinityCompose runWithThreadAffinity(
-            String name,
-            Boolean isMainFlow,
-            Boolean processBindingCore,
-            Integer processCpu,
-            Boolean enableSpecificBindingCore,
-            Integer cpu,
-            Runnable coreFunc) {
+            String taskName,
+            boolean isMainTask,
+            boolean bindMainTaskToCore,
+            int mainTaskCpu,
+            boolean bindSubTaskToCore,
+            int subTaskCpu,
+            Runnable task) {
         try {
             CompletableFuture<AffinityLock> cb = new CompletableFuture<>();
 
             Thread thread = new Thread(() -> {
-                if (!isMainFlow && (processBindingCore || processCpu >= Constance.CPU_TYPE.ANY)) {
+                if (!isMainTask && (bindMainTaskToCore || mainTaskCpu >= Constance.CPU_TYPE.ANY)) {
+
                     // cả Fanout chạy chung 1 CPU core hoặc 1 logical processor
-                    coreFunc.run();
                     cb.complete(null);
-                } else if (enableSpecificBindingCore) {
-                    // chạy trên 1 CPU core riêng
+                    task.run();
+
+                } else if (bindSubTaskToCore) {
+
+                    // sub task chạy trên 1 CPU core riêng
                     AffinityLock al = AffinityLock.acquireCore();
-                    coreFunc.run();
                     cb.complete(al);
-                } else if (cpu == Constance.CPU_TYPE.NONE) {
+                    task.run();
+
+                } else if (subTaskCpu == Constance.CPU_TYPE.NONE) {
+
                     // chạy như 1 thread bình thường, do hệ điều hành quản lý và phân phối tới các logical processor
-                    coreFunc.run();
                     cb.complete(null);
-                } else if (cpu == Constance.CPU_TYPE.ANY) {
+                    task.run();
+
+                } else if (subTaskCpu == Constance.CPU_TYPE.ANY) {
+
                     // chạy trên 1 logical processor ngẫu nhiên
                     AffinityLock al = AffinityLock.acquireLock();
-                    coreFunc.run();
                     cb.complete(al);
-                } else if (cpu > Constance.CPU_TYPE.ANY) {
+                    task.run();
+
+                } else if (subTaskCpu > Constance.CPU_TYPE.ANY) {
+
                     // chạy trên 1 logical processor chỉ định
-                    AffinityLock al = AffinityLock.acquireLock(cpu);
-                    coreFunc.run();
+                    AffinityLock al = AffinityLock.acquireLock(subTaskCpu);
                     cb.complete(al);
+                    task.run();
+
                 } else {
+
                     // cấu hình lỗi rồi
-                    LOGGER.error(MessageFormat.format("Config {0} invalid. Stop now !", name));
+                    log.error("Config {} invalid. Stop now !", taskName);
                     cb.complete(null);
+
                 }
 
                 // giữ thread sống để việc lock vào CPU core / logical processor ko bị tranh chấp nhau
@@ -144,9 +156,12 @@ public class Utils {
             affinityCompose.thread = thread;
             affinityCompose.lock = cb.get();
             return affinityCompose;
+
         } catch (Exception ex) {
-            LOGGER.error(MessageFormat.format("Config {0} exception", name), ex);
+
+            log.error("Config {} exception", taskName, ex);
             return new AffinityCompose();
+
         }
     }
 
@@ -188,6 +203,8 @@ public class Utils {
         folder.delete();
     }
 
+
+    // xóa các file lần cuối được chỉnh sửa > khoảng thời gian
     public static void deleteOldFiles(String directoryPath, long secondsOld, String endsOfFile) {
         try {
             Path directory = Paths.get(directoryPath);

@@ -1,10 +1,15 @@
 package io.github.vuhoangha.ManyToOneStateless;
 
 import io.github.vuhoangha.Common.AffinityCompose;
+import io.github.vuhoangha.Common.OmniWaitStrategy;
 import io.github.vuhoangha.Common.Utils;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
+import net.openhft.chronicle.queue.ChronicleQueue;
+import net.openhft.chronicle.queue.ExcerptAppender;
+import net.openhft.chronicle.queue.ExcerptTailer;
+import net.openhft.chronicle.queue.rollcycles.LargeRollCycles;
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
@@ -13,66 +18,93 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
 
 @Slf4j
 public class Saraswati {
 
-    private final int IDLE = 0, RUNNING = 1, STOPPED = 2;
-    private final AtomicInteger _status = new AtomicInteger(IDLE);
+    private enum SaraswatiStatus {RUNNING, STOPPED}
 
-    private final SaraswatiCfg _cfg;
-    private final Consumer<Bytes<ByteBuffer>> _handler;
-    List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
+    private SaraswatiStatus status = SaraswatiStatus.RUNNING;
 
+    private final SaraswatiConfig config;
+    private final Consumer<Bytes<ByteBuffer>> handler;      // gửi cho handle xử lý khi có dữ liệu
+    List<AffinityCompose> affinityComposes = Collections.synchronizedList(new ArrayList<>());
+    private final ChronicleQueue queue;                     // dữ liệu nhận được sẽ ghi tạm vào đây rồi mới gửi cho ứng dụng xử lý nhằm tách biệt luồng đọc và ghi. Tốc độ ghi quá nhanh mà đọc chậm cũng ko ảnh hưởng
 
-    public Saraswati(SaraswatiCfg cfg, Consumer<Bytes<ByteBuffer>> handler) {
-        // validate
+    public Saraswati(SaraswatiConfig config, Consumer<Bytes<ByteBuffer>> handler) {
+
         Utils.checkNull(handler, "Require handler");
 
-        _cfg = cfg;
-        _handler = handler;
-        _status.set(RUNNING);
+        this.config = config;
+        this.handler = handler;
 
-        _affinity_composes.add(
-                Utils.runWithThreadAffinity(
-                        "Saraswati ALL",
-                        true,
-                        _cfg.getEnableBindingCore(),
-                        _cfg.getCpu(),
-                        _cfg.getEnableBindingCore(),
-                        _cfg.getCpu(),
-                        this::_initMainFlow));
+        Utils.deleteFolder(config.getQueueTempPath());
+        queue = ChronicleQueue
+                .singleBuilder(config.getQueueTempPath())
+                .rollCycle(LargeRollCycles.LARGE_DAILY)
+                .storeFileListener((cycle, file) -> Utils.deleteOldFiles(config.getQueueTempPath(), config.getQueueTempTtl(), ".cq4"))
+                .build();
+
+        affinityComposes.add(Utils.runWithThreadAffinity("Saraswati ALL", true,
+                this.config.getCore(), this.config.getCpu(),
+                this.config.getCore(), this.config.getCpu(),
+                this::mainTask));
 
         // được chạy khi JVM bắt đầu quá trình shutdown
-        Runtime.getRuntime().addShutdownHook(new Thread(this::_onShutdown));
+        Runtime.getRuntime().addShutdownHook(new Thread(this::onShutdown));
     }
 
 
-    // Chạy luồng chính
-    private void _initMainFlow() {
-        log.info("Saraswati run Main Flow on logical processor {}", Affinity.getCpu());
+    // luồng chính của ứng dụng
+    private void mainTask() {
 
-        // sub msg
-        _affinity_composes.add(
-                Utils.runWithThreadAffinity(
-                        "Saraswati Router",
-                        false,
-                        _cfg.getEnableBindingCore(),
-                        _cfg.getCpu(),
-                        _cfg.getEnableZRouterBindingCore(),
-                        _cfg.getZRouterCpu(),
-                        () -> new Thread(this::_subMsg).start()));
+        affinityComposes.add(Utils.runWithThreadAffinity("Saraswati listen message from queue", false,
+                config.getCore(), config.getCpu(),
+                config.getCoreForListenQueue(), config.getCpuForListenQueue(),
+                this::listenQueue));
 
-        // start time server
-        new Thread(this::_initTimeServer).start();
+        LockSupport.parkNanos(500_000_000L);
+
+        affinityComposes.add(Utils.runWithThreadAffinity("Saraswati listen message from Anubis", false,
+                config.getCore(), config.getCpu(),
+                config.getCoreForListenAnubis(), config.getCpuForListenAnubis(),
+                this::listenAnubis));
     }
 
 
-    private void _subMsg() {
+    // lắng nghe dữ liệu được ghi vào queue và gửi cho ứng dụng xử lý
+    private void listenQueue() {
+
+        ExcerptTailer tailer = queue.createTailer();
+        Runnable waiter = OmniWaitStrategy.getWaiter(config.getQueueWaitStrategy());
+        Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
+
+        while (status == SaraswatiStatus.RUNNING) {
+            try {
+                if (tailer.readBytes(bytes)) {
+                    handler.accept(bytes);
+                } else {
+                    waiter.run();
+                }
+            } catch (Exception ex) {
+                log.error("Saraswati listenQueue error", ex);
+            } finally {
+                bytes.clear();
+            }
+        }
+
+        bytes.releaseLast();
+
+    }
+
+
+    // lắng nghe dữ liệu Anubis gửi sang và ghi vào queue
+    private void listenAnubis() {
         log.info("Saraswati run Sub Msg on logical processor {}", Affinity.getCpu());
+
+        ExcerptAppender appender = queue.createAppender();
 
         try (ZContext context = new ZContext()) {
             ZMQ.Socket socket = context.createSocket(SocketType.ROUTER);
@@ -80,12 +112,12 @@ public class Saraswati {
             socket.setHeartbeatIvl(10000);
             socket.setHeartbeatTtl(15000);
             socket.setHeartbeatTimeout(15000);
-            socket.bind(_cfg.getUrl());
+            socket.bind(config.getUrl());
 
             Bytes<ByteBuffer> bytesReq = Bytes.elasticByteBuffer();     // tất cả dữ liệu gửi sang, cấu trúc ["time_to_live"]["req_id"]["data"]
             Bytes<ByteBuffer> bytesData = Bytes.elasticByteBuffer();    // thông tin dữ liệu gửi sang
 
-            while (_status.get() == RUNNING) {
+            while (status == SaraswatiStatus.RUNNING) {
                 try {
                     byte[] clientAddress = socket.recv(0);
                     byte[] request = socket.recv(0);
@@ -97,14 +129,13 @@ public class Saraswati {
 
                     if (expiry >= System.currentTimeMillis()) {     // msg còn hạn sử dụng
 
+                        // đọc và ghi vào queue
                         bytesReq.read(bytesData);
+                        appender.writeBytes(bytesData);
 
                         // phản hồi Anubis confirm nhận được
                         socket.send(clientAddress, ZMQ.SNDMORE);
                         socket.send(Utils.longToBytes(reqId), 0);
-
-                        // gửi cho ứng dụng xử lý
-                        _handler.accept(bytesData);
                     } else {
                         log.warn("The message {} has expired {}", reqId, expiry);
                     }
@@ -125,63 +156,15 @@ public class Saraswati {
     }
 
 
-    private void _initTimeServer() {
-        log.info("Saraswati run Time Server on logical processor {}", Affinity.getCpu());
-
-        try (ZContext context = new ZContext()) {
-            ZMQ.Socket socket = context.createSocket(SocketType.ROUTER);
-            socket.setHeartbeatIvl(10000);
-            socket.setHeartbeatTtl(15000);
-            socket.setHeartbeatTimeout(15000);
-            socket.bind(_cfg.getTimeUrl());
-
-            Bytes<ByteBuffer> bytesRequest = Bytes.elasticByteBuffer();     // cấu trúc ["client_time"]
-            Bytes<ByteBuffer> bytesResponse = Bytes.elasticByteBuffer();    // cấu trúc ["client_time"]["server_time"]
-
-            while (_status.get() == RUNNING) {
-                try {
-                    byte[] clientAddress = socket.recv(0);
-                    byte[] request = socket.recv(0);
-
-                    bytesRequest.write(request);
-
-                    long clientTime = bytesRequest.readLong();
-
-                    // gửi cho Anubis confirm nhận được ["client_time"]["system_time"]
-                    bytesResponse.writeLong(clientTime);
-                    bytesResponse.writeLong(System.currentTimeMillis());
-                    socket.send(clientAddress, ZMQ.SNDMORE);
-                    socket.send(bytesResponse.toByteArray(), 0);
-
-                } catch (Exception ex) {
-                    log.error("Saraswati Time Server error", ex);
-                } finally {
-                    bytesRequest.clear();
-                    bytesResponse.clear();
-                }
-            }
-
-            // close & release
-            bytesRequest.releaseLast();
-            bytesResponse.releaseLast();
-            socket.close();
-        }
-    }
-
-
-    private void _onShutdown() {
+    private void onShutdown() {
         log.info("Saraswati preparing shutdown");
 
-        _status.set(STOPPED);
+        status = SaraswatiStatus.STOPPED;
 
         LockSupport.parkNanos(1_500_000_000);
 
         // giải phóng các CPU core / Logical processor đã sử dụng
-        for (AffinityCompose affinityCompose : _affinity_composes) {
-            affinityCompose.release();
-        }
-
-        LockSupport.parkNanos(500_000_000);
+        affinityComposes.forEach(AffinityCompose::release);
 
         log.info("Saraswati SHUTDOWN !");
     }

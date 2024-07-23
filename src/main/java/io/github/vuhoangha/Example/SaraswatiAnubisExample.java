@@ -4,7 +4,7 @@ import io.github.vuhoangha.Example.structure_example.AnimalTest;
 import io.github.vuhoangha.ManyToOneStateless.Anubis;
 import io.github.vuhoangha.ManyToOneStateless.AnubisCfg;
 import io.github.vuhoangha.ManyToOneStateless.Saraswati;
-import io.github.vuhoangha.ManyToOneStateless.SaraswatiCfg;
+import io.github.vuhoangha.ManyToOneStateless.SaraswatiConfig;
 import io.github.vuhoangha.common.Promise;
 import lombok.extern.slf4j.Slf4j;
 
@@ -25,7 +25,7 @@ public class SaraswatiAnubisExample {
 
     public static void runSaraswatiNormal() {
         Saraswati saraswati = new Saraswati(
-                SaraswatiCfg.getDefault(),
+                SaraswatiConfig.standard(),
                 bytes -> {
                     System.out.println("Saraswati: " + new AnimalTest(bytes));
                 }
@@ -86,7 +86,7 @@ public class SaraswatiAnubisExample {
         }).start();
 
         Saraswati saraswati = new Saraswati(
-                SaraswatiCfg.getDefault(),
+                SaraswatiConfig.standard(),
                 bytes -> {
                     count.incrementAndGet();
                 }
