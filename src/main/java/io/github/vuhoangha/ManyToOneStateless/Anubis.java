@@ -53,11 +53,10 @@ public class Anubis {
     // dùng để chứa dữ liệu user gửi lên sẽ ghi tạm vào đây
     private ChronicleQueue queue;
 
-    
+
     public Anubis(AnubisConfig config) {
         // validate
         Utils.checkNull(config.getSaraswatiIP(), "Require SaraswatiIP");
-        Utils.checkNull(config.getQueueTempPath(), "Require QueueTempPath");
 
         this.config = config;
         zContext = new ZContext();
@@ -84,8 +83,6 @@ public class Anubis {
                 config.getCore(), config.getCpu(),
                 config.getCoreForListenQueue(), config.getCpuForListenQueue(),
                 this::processQueuedMessages));
-
-        LockSupport.parkNanos(500_000_000L);
 
         threadGroups.add(Utils.runWithThreadAffinity("Anubis handle incoming messages", false,
                 config.getCore(), config.getCpu(),
@@ -266,8 +263,6 @@ public class Anubis {
 
         zContext.destroy();
         queue.close();
-
-        LockSupport.parkNanos(1_500_000_000);
 
         log.info("Anubis SHUTDOWN !");
     }

@@ -20,22 +20,24 @@ public class SaraswatiAnubisExample {
     public static void runNormal() {
         new Thread(SaraswatiAnubisExample::runSaraswatiNormal).start();
         LockSupport.parkNanos(2_000_000_000L);
-        new Thread(() -> SaraswatiAnubisExample.runAnubisNormal("anubis_queue_temp")).start();
+        new Thread(SaraswatiAnubisExample::runAnubisNormal).start();
     }
 
     public static void runSaraswatiNormal() {
         Saraswati saraswati = new Saraswati(
-                SaraswatiConfig.standard(),
+                SaraswatiConfig.standardConfig(),
                 bytes -> {
                     System.out.println("Saraswati: " + new AnimalTest(bytes));
                 }
         );
     }
 
-    public static void runAnubisNormal(String queuePath) {
+    public static void runAnubisNormal() {
         Anubis anubis = new Anubis(
-                AnubisConfig.getDefault().setSaraswatiIP("127.0.0.1").setQueueTempPath(queuePath)
+                AnubisConfig.standardConfig().setSaraswatiIP("127.0.0.1")
         );
+
+        LockSupport.parkNanos(1_000_000_000L);
 
         int count = 1;
         while (true) {
@@ -70,7 +72,7 @@ public class SaraswatiAnubisExample {
     public static void runBenchmark() {
         new Thread(SaraswatiAnubisExample::runSaraswatiBenchmark).start();
         LockSupport.parkNanos(2_000_000_000L);
-        new Thread(() -> SaraswatiAnubisExample.runAnubisBenchmark("anubis_queue_temp_1")).start();
+        new Thread(SaraswatiAnubisExample::runAnubisBenchmark).start();
 //        new Thread(() -> SaraswatiAnubisExample.runAnubisBenchmark("anubis_queue_temp_2")).start();
     }
 
@@ -86,16 +88,16 @@ public class SaraswatiAnubisExample {
         }).start();
 
         Saraswati saraswati = new Saraswati(
-                SaraswatiConfig.standard(),
+                SaraswatiConfig.standardConfig(),
                 bytes -> {
                     count.incrementAndGet();
                 }
         );
     }
 
-    public static void runAnubisBenchmark(String queuePath) {
+    public static void runAnubisBenchmark() {
         Anubis anubis = new Anubis(
-                AnubisConfig.bestPerf().setSaraswatiIP("127.0.0.1").setQueueTempPath(queuePath)
+                AnubisConfig.bestPerformanceConfig().setSaraswatiIP("127.0.0.1")
         );
 
         int count = 1;
