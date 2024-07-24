@@ -37,8 +37,8 @@ public class Anubis {
     private Status status = Status.RUNNING;
 
     private final AnubisConfig config;
-    private Disruptor<Bytes<ByteBuffer>> disruptor;
-    private RingBuffer<Bytes<ByteBuffer>> ringBuffer;
+    private Disruptor<AnubisDisruptorEvent> disruptor;
+    private RingBuffer<AnubisDisruptorEvent> ringBuffer;
     private final ZContext zContext;
     List<AffinityCompose> threadGroups = Collections.synchronizedList(new ArrayList<>());
 
@@ -71,6 +71,9 @@ public class Anubis {
     }
 
     private void startAnubis() {
+
+        log.info("Start Anubis on logical processor {}", Affinity.getCpu());
+
         // các msg ứng dụng gửi đi sẽ ghi vào queue trước rồi mới gửi sang Saraswati để việc gửi dữ liệu nội bộ không ảnh hưởng tới luồng xử lý của ứng dụng
         Utils.deleteFolder(config.getQueueTempPath());
         queue = ChronicleQueue
@@ -96,7 +99,7 @@ public class Anubis {
         log.info("Anubis handle incoming messages on logical processor {}", Affinity.getCpu());
 
         disruptor = new Disruptor<>(
-                Bytes::elasticByteBuffer,
+                AnubisDisruptorEvent::new,
                 RING_BUFFER_SIZE,
                 Utils.createNonDaemonThreadFactory(),
                 ProducerType.MULTI,
@@ -104,7 +107,18 @@ public class Anubis {
 
         // lắng nghe các request user gửi lên và ghi vào queue
         ExcerptAppender appender = queue.createAppender();
-        disruptor.handleEventsWith((event, sequence, endOfBatch) -> appender.writeBytes(event));
+        disruptor.handleEventsWith((event, sequence, endOfBatch) -> {
+
+            đoạn này viết luôn 1 class mới chứa dữ liệu tương tự ConcurrentHashMap cho messageCallbacks
+                    ý tưởng là class này sẽ gồm 2 Hashmap đơn luồng, mỗi cái cho 1 chiều insert và remote
+                    định kỳ khi list remove có 100_000 phần tử chẳng hạn thì dùng synchronize để đồng bộ lại
+
+            // quản lý thời gian timeout
+            messageExpiryTimes.put(reqId, System.currentTimeMillis() + config.getLocalMsgTimeout());
+//            // quản lý callback trả về
+            messageCallbacks.put(reqId, cb);
+
+        });
 
         disruptor.start();
         ringBuffer = disruptor.getRingBuffer();
@@ -200,26 +214,23 @@ public class Anubis {
 
         try {
 
-            // quản lý thời gian timeout
-            messageExpiryTimes.put(reqId, System.currentTimeMillis() + config.getMsgTimeout());
-            // quản lý callback trả về
-            messageCallbacks.put(reqId, cb);
-
             // gửi sang luồng chính để gửi cho core
-            ringBuffer.publishEvent((newEvent, sequence, __expiry, __id, __data) -> {
-                // dữ liệu này sẽ dùng gửi thẳng sang Saraswati
+            ringBuffer.publishEvent((newEvent, sequence, __data, __id, __cb) -> {
+                long now = System.currentTimeMillis();
+
                 // ["time_to_live"]["req_id"]["data"]
-                newEvent.clear();
-                newEvent.writeLong(__expiry);
-                newEvent.writeLong(__id);
-                __data.writeMarshallable(newEvent);
-            }, System.currentTimeMillis() + config.getMsgTtl(), reqId, data);
+                Bytes<ByteBuffer> bytes = newEvent.bytes;
+                bytes.clear();
+                bytes.writeLong(now + config.getRemoteMsgTimeout());
+                bytes.writeLong(__id);
+                __data.writeMarshallable(bytes);
+
+                newEvent.localExpiry = now + config.getLocalMsgTimeout();
+                newEvent.callback = __cb;
+            }, data, reqId, cb);
 
         } catch (Exception ex) {
             log.error("Anubis send error, data {}", data.toString(), ex);
-
-            messageExpiryTimes.remove(reqId);
-            messageCallbacks.remove(reqId);
             cb.completeWithException(ex);
         }
     }

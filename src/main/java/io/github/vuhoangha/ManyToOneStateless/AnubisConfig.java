@@ -43,10 +43,10 @@ public class AnubisConfig {
     private Integer cpuForReceiveMessage;
 
     // timeout gửi/nhận message dành cho user (quản lý trên local Anubis)
-    private Long msgTimeout = 30000L;
+    private Long localMsgTimeout = 30000L;
     // thời gian message còn hiệu lực khi Saraswati nhận được, quá thời gian này Saraswati từ chối xử lý msg
-    // 'ttl' nên nhỏ hơn 'timeout' để chắc chắn rằng message này không thể được xử lý bởi Saraswati
-    private Long msgTtl = 15000L;
+    // 'remoteMsgTimeout' nên nhỏ hơn 'localMsgTimeout' để chắc chắn rằng message này không thể được xử lý bởi Saraswati
+    private Long remoteMsgTimeout = 15000L;
 
     public static AnubisConfig standardConfig() {
         return new AnubisConfig()
@@ -64,7 +64,7 @@ public class AnubisConfig {
     public static AnubisConfig bestPerformanceConfig() {
         return new AnubisConfig()
                 .setCore(false)
-                .setCpu(Constance.CPU_TYPE.ANY)
+                .setCpu(Constance.CPU_TYPE.NONE)
                 .setCoreForListenQueue(true)
                 .setCpuForListenQueue(Constance.CPU_TYPE.NONE)
                 .setQueueWaitStrategy(OmniWaitStrategy.BUSY)

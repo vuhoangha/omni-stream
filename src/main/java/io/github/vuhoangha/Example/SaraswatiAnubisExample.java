@@ -7,6 +7,7 @@ import io.github.vuhoangha.ManyToOneStateless.Saraswati;
 import io.github.vuhoangha.ManyToOneStateless.SaraswatiConfig;
 import io.github.vuhoangha.common.Promise;
 import lombok.extern.slf4j.Slf4j;
+import net.openhft.affinity.AffinityLock;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
@@ -81,14 +82,13 @@ public class SaraswatiAnubisExample {
         AtomicInteger count = new AtomicInteger(0);
         new Thread(() -> {
             while (true) {
-                System.out.println("Rate " + count.get());
-                count.set(0);
+                System.out.println("Rate " + count.getAndSet(0));
                 LockSupport.parkNanos(1_000_000_000L);
             }
         }).start();
 
         Saraswati saraswati = new Saraswati(
-                SaraswatiConfig.standardConfig(),
+                SaraswatiConfig.bestPerformanceConfig(),
                 bytes -> {
                     count.incrementAndGet();
                 }
@@ -96,36 +96,50 @@ public class SaraswatiAnubisExample {
     }
 
     public static void runAnubisBenchmark() {
+
         Anubis anubis = new Anubis(
-                AnubisConfig.bestPerformanceConfig().setSaraswatiIP("127.0.0.1")
+                AnubisConfig.standardConfig().setSaraswatiIP("127.0.0.1")
         );
 
-        int count = 1;
-        AnimalTest animal = new AnimalTest(
-                count, // index
-                count * 10L, // age
-                count * 10L, // weight
-                count * 10L, // height
-                count * 20L, // speed
-                count * 20L, // energy
-                count * 20L, // strength
-                count * 30L, // agility
-                count * 30L, // intelligence
-                count * 30L, // lifespan
-                count * 100L, // offspring
-                count * 100L  // territorySize
-        );
+        new Thread(() -> {
+            AffinityLock al = AffinityLock.acquireLock(-1);
 
-        LockSupport.parkNanos(5_000_000_000L);
+            int count = 1;
+            AnimalTest animal = new AnimalTest(
+                    count, // index
+                    count * 10L, // age
+                    count * 10L, // weight
+                    count * 10L, // height
+                    count * 20L, // speed
+                    count * 20L, // energy
+                    count * 20L, // strength
+                    count * 30L, // agility
+                    count * 30L, // intelligence
+                    count * 30L, // lifespan
+                    count * 100L, // offspring
+                    count * 100L  // territorySize
+            );
 
-        for (int i = 0; i < 100_000_000; i++) {
-            for (int j = 0; j < 100_000; j++) {
-                anubis.sendMessageAsync(animal, new Promise<>());
+            LockSupport.parkNanos(5_000_000_000L);
+
+            AtomicInteger count1 = new AtomicInteger(0);
+            new Thread(() -> {
+                while (true) {
+                    System.out.println("Rate send " + count1.getAndSet(0));
+                    LockSupport.parkNanos(1_000_000_000L);
+                }
+            }).start();
+
+            for (int i = 0; i < 100_000_000; i++) {
+                for (int j = 0; j < 50_000; j++) {
+                    count1.getAndIncrement();
+                    anubis.sendMessageAsync(animal, new Promise<>());
+                }
+
+                LockSupport.parkNanos(20_000_000L);
             }
 
-            LockSupport.parkNanos(50_000_000L);
-        }
-
+        }).start();
     }
 
     //endregion
