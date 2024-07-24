@@ -22,173 +22,139 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentNavigableMap;
-import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 
 @Slf4j
 public class Anubis {
 
-    private final int IDLE = 0, RUNNING = 1, STOPPED = 2;
-    private final AtomicInteger _status = new AtomicInteger(IDLE);
+    private static final long TIMEOUT_CHECK_INTERVAL_MS = 1000;       // bao lâu check timeout một lần
+    private static final int RING_BUFFER_SIZE = 2048;
 
-    private final AnubisCfg _cfg;
-    private Disruptor<Bytes<ByteBuffer>> _disruptor;
-    private RingBuffer<Bytes<ByteBuffer>> _ring_buffer;
-    private final ZContext _zContext;
-    List<AffinityCompose> _affinity_composes = Collections.synchronizedList(new ArrayList<>());
+    private enum Status {RUNNING, STOPPED}
+
+    private Status status = Status.RUNNING;
+
+    private final AnubisConfig config;
+    private Disruptor<Bytes<ByteBuffer>> disruptor;
+    private RingBuffer<Bytes<ByteBuffer>> ringBuffer;
+    private final ZContext zContext;
+    List<AffinityCompose> threadGroups = Collections.synchronizedList(new ArrayList<>());
 
     // map id của item với thời gian tối đa nó chờ bên Saraswati xác nhận
-    private final ConcurrentNavigableMap<Long, Long> _map_item_with_time = new ConcurrentSkipListMap<>();
+    // TODO thử xem có cấu trúc dữ liệu nào tốt hơn ko
+    private final ConcurrentNavigableMap<Long, Long> messageExpiryTimes = new ConcurrentSkipListMap<>();
     // map id của item với callback để call lại khi cần
-    private final ConcurrentHashMap<Long, Promise<Boolean>> _map_item_with_callback = new ConcurrentHashMap<>();
+    // TODO thử xem có cấu trúc dữ liệu nào tốt hơn ko
+    private final ConcurrentHashMap<Long, Promise<Boolean>> messageCallbacks = new ConcurrentHashMap<>();
     // quản lý id của các request. ID sẽ increment sau mỗi request
-    private final AtomicLong _sequence_id = new AtomicLong(System.currentTimeMillis());
-    // độ trễ thời gian giữa Anubis và Saraswati = anubis_time - saraswati_time
-    private final AtomicLong _time_latency = new AtomicLong(0);
+    private final AtomicLong sequenceID = new AtomicLong(System.currentTimeMillis());
     // dùng để chứa dữ liệu user gửi lên sẽ ghi tạm vào đây
-    private ChronicleQueue _queue;
+    private ChronicleQueue queue;
 
-
-    public Anubis(AnubisCfg cfg) {
+    
+    public Anubis(AnubisConfig config) {
         // validate
-        Utils.checkNull(cfg.getSaraswatiIP(), "Require SaraswatiIP");
-        Utils.checkNull(cfg.getQueueTempPath(), "Require QueueTempPath");
+        Utils.checkNull(config.getSaraswatiIP(), "Require SaraswatiIP");
+        Utils.checkNull(config.getQueueTempPath(), "Require QueueTempPath");
 
-        _cfg = cfg;
-        _zContext = new ZContext();
-        _status.set(RUNNING);
+        this.config = config;
+        zContext = new ZContext();
 
-        _affinity_composes.add(Utils.runWithThreadAffinity(
-                "Anubis ALL",
-                true,
-                _cfg.getEnableBindingCore(),
-                _cfg.getCpu(),
-                _cfg.getEnableBindingCore(),
-                _cfg.getCpu(),
-                this::_initMainFlow));
+        threadGroups.add(Utils.runWithThreadAffinity("Anubis start", true,
+                config.getCore(), config.getCpu(),
+                config.getCore(), config.getCpu(),
+                this::startAnubis));
 
         // được chạy khi JVM bắt đầu quá trình shutdown
-        Runtime.getRuntime().addShutdownHook(new Thread(this::_onShutdown));
+        Runtime.getRuntime().addShutdownHook(new Thread(this::onShutdown));
     }
 
-    private void _initMainFlow() {
-        // các request user gửi đi sẽ được ghi vào queue trước
-        //        SingleChronicleQueue queue = SingleChronicleQueueBuilder.binary("anubis_queue_" + System.nanoTime()).rollCycle(LargeRollCycles.LARGE_DAILY).build();
-        Utils.deleteFolder(_cfg.getQueueTempPath());
-        _queue = ChronicleQueue
-                .singleBuilder(_cfg.getQueueTempPath())
+    private void startAnubis() {
+        // các msg ứng dụng gửi đi sẽ ghi vào queue trước rồi mới gửi sang Saraswati để việc gửi dữ liệu nội bộ không ảnh hưởng tới luồng xử lý của ứng dụng
+        Utils.deleteFolder(config.getQueueTempPath());
+        queue = ChronicleQueue
+                .singleBuilder(config.getQueueTempPath())
                 .rollCycle(LargeRollCycles.LARGE_DAILY)
-                .storeFileListener((cycle, file) -> Utils.deleteOldFiles(_cfg.getQueueTempPath(), _cfg.getTtlQueueTempFile(), ".cq4"))
+                .storeFileListener((cycle, file) -> Utils.deleteOldFiles(config.getQueueTempPath(), config.getQueueTempTtl(), ".cq4"))
                 .build();
 
-        _affinity_composes.add(
-                Utils.runWithThreadAffinity(
-                        "Anubis listen queue",
-                        false,
-                        _cfg.getEnableBindingCore(),
-                        _cfg.getCpu(),
-                        _cfg.getEnableQueueBindingCore(),
-                        _cfg.getQueueCpu(),
-                        () -> new Thread(this::listenQueue).start()));
+        threadGroups.add(Utils.runWithThreadAffinity("Anubis process queue message", false,
+                config.getCore(), config.getCpu(),
+                config.getCoreForListenQueue(), config.getCpuForListenQueue(),
+                this::processQueuedMessages));
 
-        _affinity_composes.add(
-                Utils.runWithThreadAffinity(
-                        "Anubis Disruptor",
-                        false,
-                        _cfg.getEnableBindingCore(),
-                        _cfg.getCpu(),
-                        _cfg.getEnableDisruptorBindingCore(),
-                        _cfg.getDisruptorCpu(),
-                        this::_initDisruptor));
+        LockSupport.parkNanos(500_000_000L);
 
-        // lắng nghe time từ server
-        new Thread(this::_listenTimeServer).start();
+        threadGroups.add(Utils.runWithThreadAffinity("Anubis handle incoming messages", false,
+                config.getCore(), config.getCpu(),
+                config.getCoreForReceiveMessage(), config.getCpuForReceiveMessage(),
+                this::handleIncomingMessages));
     }
 
 
-    /**
-     * Gom nhiều message được gửi lại và chuyển cho 1 thread gửi đi
-     * đồng thời nhận cả phản hồi từ Saraswati
-     */
-    private void _initDisruptor() {
-        log.info("Anubis run Disruptor on logical processor {}", Affinity.getCpu());
+    // Gom nhiều message được ứng dụng gửi --> ghi vào queue --> đọc queue --> gửi sang Saraswati
+    private void handleIncomingMessages() {
+        log.info("Anubis handle incoming messages on logical processor {}", Affinity.getCpu());
 
-        _disruptor = new Disruptor<>(
+        disruptor = new Disruptor<>(
                 Bytes::elasticByteBuffer,
-                _cfg.getRingBufferSize(),
-                Executors.newSingleThreadExecutor(),
+                RING_BUFFER_SIZE,
+                Utils.createNonDaemonThreadFactory(),
                 ProducerType.MULTI,
-                _cfg.getDisruptorWaitStrategy());
+                config.getDisruptorWaitStrategy());
 
         // lắng nghe các request user gửi lên và ghi vào queue
-        ExcerptAppender appender = _queue.createAppender();
-        _disruptor.handleEventsWith((event, sequence, endOfBatch) -> appender.writeBytes(event));
+        ExcerptAppender appender = queue.createAppender();
+        disruptor.handleEventsWith((event, sequence, endOfBatch) -> appender.writeBytes(event));
 
-        _disruptor.start();
-
-        _ring_buffer = _disruptor.getRingBuffer();
+        disruptor.start();
+        ringBuffer = disruptor.getRingBuffer();
     }
 
 
-    // lắng nghe các request của user được ghi vào queue, lấy chúng ra và gửi sang core
-    private void listenQueue() {
-        log.info("Anubis listen queue on logical processor {}", Affinity.getCpu());
+    // lắng nghe msg được ghi vào queue tạm, lấy ra và gửi sang Saraswati
+    private void processQueuedMessages() {
+        log.info("Anubis process queue message on logical processor {}", Affinity.getCpu());
 
-        ExcerptTailer tailer = _queue.createTailer();
-
+        ZMQ.Socket socket = createSendingSocket();
+        ExcerptTailer tailer = queue.createTailer();
         Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
+        Runnable waiter = OmniWaitStrategy.getWaiter(config.getQueueWaitStrategy());
+        long nextTimeoutCheckTime = System.currentTimeMillis() + TIMEOUT_CHECK_INTERVAL_MS;     // lần check timeout tiếp theo
 
-        ZMQ.Socket socket = _zContext.createSocket(SocketType.DEALER);
-        socket.setRcvHWM(1000000);
-        socket.setHeartbeatIvl(30000);
-        socket.setHeartbeatTtl(45000);
-        socket.setHeartbeatTimeout(45000);
-        socket.setReconnectIVL(10000);
-        socket.setReconnectIVLMax(10000);
-        socket.connect(_cfg.getUrl());
-
-        Runnable waiter = OmniWaitStrategy.getWaiter(_cfg.getQueueWaitStrategy());
-
-        long timeoutIntervalMs = 1000;      // bao lâu check timeout một lần
-        long nextTimeCheckTimeout = System.currentTimeMillis() + timeoutIntervalMs;     // lần check timeout tiếp theo
-
-        while (_status.get() == RUNNING) {
+        while (status == Status.RUNNING) {
             try {
-                // quét xem trong queue có item mới ko
+                // đọc và gửi hết các msg đang chờ trong queue
                 while (tailer.readBytes(bytes)) {
                     socket.send(bytes.toByteArray(), 0);
                     bytes.clear();
                 }
 
-                // check xem có nhận đc msg mới không?
+                // xử lý hết các msg mới nhận được
                 while (true) {
                     byte[] reply = socket.recv(ZMQ.NOBLOCK);
                     if (reply != null) {
                         // xóa khỏi cache --> callback về
                         long reqID = Utils.bytesToLong(reply);
-                        _map_item_with_time.remove(reqID);
-                        Promise<Boolean> cb = _map_item_with_callback.remove(reqID);
-                        if (cb != null)
-                            cb.complete(true);
+                        messageExpiryTimes.remove(reqID);
+                        Promise<Boolean> cb = messageCallbacks.remove(reqID);
+                        if (cb != null) cb.complete(true);
                     } else {
                         break;
                     }
                 }
 
-                // check xem có msg nào bị timeout ko
+                // xử lý hết các msg timeout
                 long nowMS = System.currentTimeMillis();
-                if (nextTimeCheckTimeout < nowMS) {
-                    while (!_map_item_with_time.isEmpty()) {
-                        Map.Entry<Long, Long> firstEntry = _map_item_with_time.firstEntry();
+                if (nextTimeoutCheckTime < nowMS) {
+                    while (!messageExpiryTimes.isEmpty()) {
+                        Map.Entry<Long, Long> firstEntry = messageExpiryTimes.firstEntry();
                         if (firstEntry.getValue() < nowMS) {
                             // bị timeout --> xóa khỏi cache --> callback về
-                            _map_item_with_time.remove(firstEntry.getKey());
-                            Promise<Boolean> cb = _map_item_with_callback.remove(firstEntry.getKey());
+                            messageExpiryTimes.remove(firstEntry.getKey());
+                            Promise<Boolean> cb = messageCallbacks.remove(firstEntry.getKey());
                             cb.complete(false);
                             log.warn("Anubis send msg timeout");
                         } else {
@@ -196,7 +162,7 @@ public class Anubis {
                             break;
                         }
                     }
-                    nextTimeCheckTimeout += timeoutIntervalMs;
+                    nextTimeoutCheckTime += TIMEOUT_CHECK_INTERVAL_MS;
                 }
 
                 // cho CPU nghỉ ngơi 1 chút
@@ -204,50 +170,67 @@ public class Anubis {
 
             } catch (Exception ex) {
                 log.error("Anubis on write queue error", ex);
+
+                // khởi tạo lại socket
+                socket.close();
+                socket = createSendingSocket();
+                LockSupport.parkNanos(1_000_000_000L);
             }
         }
 
+        tailer.close();
         socket.close();
+        bytes.releaseLast();
     }
 
 
-    public void sendAsync(WriteBytesMarshallable data, Promise<Boolean> cb) {
+    private ZMQ.Socket createSendingSocket() {
+        ZMQ.Socket socket = zContext.createSocket(SocketType.DEALER);
+        socket.setRcvHWM(1000000);
+        socket.setHeartbeatIvl(30000);
+        socket.setHeartbeatTtl(45000);
+        socket.setHeartbeatTimeout(45000);
+        socket.setReconnectIVL(10000);
+        socket.setReconnectIVLMax(10000);
+        socket.connect(config.getUrl());
+        return socket;
+    }
 
-        long reqId = _sequence_id.incrementAndGet();
+
+    public void sendMessageAsync(WriteBytesMarshallable data, Promise<Boolean> cb) {
+
+        long reqId = sequenceID.incrementAndGet();
 
         try {
 
             // quản lý thời gian timeout
-            _map_item_with_time.put(reqId, System.currentTimeMillis() + _cfg.getTimeout());
-
+            messageExpiryTimes.put(reqId, System.currentTimeMillis() + config.getMsgTimeout());
             // quản lý callback trả về
-            _map_item_with_callback.put(reqId, cb);
+            messageCallbacks.put(reqId, cb);
 
             // gửi sang luồng chính để gửi cho core
-            _ring_buffer.publishEvent(
-                    (newEvent, sequence, __id, __data, __expiry) -> {
-                        // dữ liệu này sẽ dùng gửi thẳng sang Saraswati
-                        // ["time_to_live"]["req_id"]["data"]
-                        newEvent.clear();
-                        newEvent.writeLong(__expiry);
-                        newEvent.writeLong(__id);
-                        __data.writeMarshallable(newEvent);
-                    },
-                    reqId, data, getExpiry());
+            ringBuffer.publishEvent((newEvent, sequence, __expiry, __id, __data) -> {
+                // dữ liệu này sẽ dùng gửi thẳng sang Saraswati
+                // ["time_to_live"]["req_id"]["data"]
+                newEvent.clear();
+                newEvent.writeLong(__expiry);
+                newEvent.writeLong(__id);
+                __data.writeMarshallable(newEvent);
+            }, System.currentTimeMillis() + config.getMsgTtl(), reqId, data);
 
         } catch (Exception ex) {
             log.error("Anubis send error, data {}", data.toString(), ex);
 
-            _map_item_with_time.remove(reqId);
-            _map_item_with_callback.remove(reqId);
+            messageExpiryTimes.remove(reqId);
+            messageCallbacks.remove(reqId);
             cb.completeWithException(ex);
         }
     }
 
 
-    public boolean send(WriteBytesMarshallable data, Promise<Boolean> cb, long timeInterval) {
+    public boolean sendMessage(WriteBytesMarshallable data, Promise<Boolean> cb, long timeInterval) {
         try {
-            sendAsync(data, cb);
+            sendMessageAsync(data, cb);
             return cb.get(timeInterval);
         } catch (Exception ex) {
             return false;
@@ -255,94 +238,34 @@ public class Anubis {
     }
 
 
-    public boolean send(WriteBytesMarshallable data, long timeInterval) {
+    public boolean sendMessage(WriteBytesMarshallable data, long timeInterval) {
         Promise<Boolean> cb = new Promise<>();
-        return send(data, cb, timeInterval);
+        return sendMessage(data, cb, timeInterval);
     }
 
 
-    public boolean send(WriteBytesMarshallable data) {
-        return send(data, 1_000_000L);
+    public boolean sendMessage(WriteBytesMarshallable data) {
+        return sendMessage(data, 1_000_000L);
     }
 
 
-    private long getExpiry() {
-        return System.currentTimeMillis() + _cfg.getTtl() - _time_latency.get();
-    }
-
-
-    // cơ chế để căn chỉnh thời gian bên gửi và bên nhận ít chênh lệch nhất có thể, phục vụ cho việc set expiry cho msg gửi đi
-    private void _listenTimeServer() {
-        // khởi tạo socket
-        ZMQ.Socket socket = _zContext.createSocket(SocketType.DEALER);
-        socket.setHeartbeatIvl(10000);
-        socket.setHeartbeatTtl(15000);
-        socket.setHeartbeatTimeout(15000);
-        socket.setReconnectIVL(10000);
-        socket.setReconnectIVLMax(10000);
-        socket.connect(_cfg.getTimeServerUrl());
-
-        Bytes<ByteBuffer> bytesResponse = Bytes.elasticByteBuffer();
-        Bytes<ByteBuffer> bytesRequest = Bytes.elasticByteBuffer();
-        long nextTimeRequest = 0;   // thời gian lần tiếp theo sẽ quét time
-
-        while (_status.get() == RUNNING) {
-            try {
-                long now = System.currentTimeMillis();
-
-                if (nextTimeRequest < now) {
-                    nextTimeRequest = now + _cfg.getSyncTimeServerInterval();
-                    bytesRequest.writeLong(now);
-                    socket.send(bytesRequest.toByteArray(), 0);
-                    bytesRequest.clear();
-                } else {
-                    byte[] reply = socket.recv(ZMQ.NOBLOCK);
-                    if (reply != null) {
-                        bytesResponse.write(reply);
-                        long clientTime = bytesResponse.readLong();
-                        long systemTime = bytesResponse.readLong();
-                        long diff = now - clientTime;
-                        if (diff <= 1000)   // các msg phản hồi dưới 1s mới tính
-                            _time_latency.set(((clientTime + now) / 2) - systemTime);   // đoạn này đang tính thời gian trung bình để 1 request đi từ A->B, trừ đi thời gian thực tế bên server B để lấy độ chênh lệch. Sau này khi gửi request sang server B sẽ trừ đi phần chênh lệch kia
-                        bytesResponse.clear();
-                    }
-                }
-
-                // tuy rằng sleep tạm thời cho CPU nghỉ ngơi nhưng nó cũng gây ảnh hưởng tới latency đo được
-                // nghỉ càng nhiều sai số càng lớn
-                LockSupport.parkNanos(50_000_000L);
-            } catch (Exception ex) {
-                bytesRequest.clear();
-                bytesResponse.clear();
-                log.error("Anubis ListenTimeServer error", ex);
-            }
-        }
-
-        bytesResponse.releaseLast();
-        bytesRequest.releaseLast();
-        socket.close();
-    }
-
-
-    private void _onShutdown() {
+    private void onShutdown() {
         log.info("Anubis closing...");
 
-        _status.set(STOPPED);
+        status = Status.STOPPED;
 
-        _map_item_with_time.clear();
-        _map_item_with_callback.clear();
+        messageExpiryTimes.clear();
+        messageCallbacks.clear();
 
         // disruptor
-        _disruptor.shutdown();
+        disruptor.shutdown();
         LockSupport.parkNanos(500_000_000);   // tạm ngừng để xử lý nốt msg trong ring buffer
 
-        // zmq
-        _zContext.destroy();
-
         // giải phóng các CPU core / Logical processor đã sử dụng
-        for (AffinityCompose affinityCompose : _affinity_composes) {
-            affinityCompose.release();
-        }
+        threadGroups.forEach(AffinityCompose::release);
+
+        zContext.destroy();
+        queue.close();
 
         LockSupport.parkNanos(1_500_000_000);
 

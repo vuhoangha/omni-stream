@@ -2,7 +2,7 @@ package io.github.vuhoangha.Example;
 
 import io.github.vuhoangha.Example.structure_example.AnimalTest;
 import io.github.vuhoangha.ManyToOneStateless.Anubis;
-import io.github.vuhoangha.ManyToOneStateless.AnubisCfg;
+import io.github.vuhoangha.ManyToOneStateless.AnubisConfig;
 import io.github.vuhoangha.ManyToOneStateless.Saraswati;
 import io.github.vuhoangha.ManyToOneStateless.SaraswatiConfig;
 import io.github.vuhoangha.common.Promise;
@@ -34,7 +34,7 @@ public class SaraswatiAnubisExample {
 
     public static void runAnubisNormal(String queuePath) {
         Anubis anubis = new Anubis(
-                AnubisCfg.getDefault().setSaraswatiIP("127.0.0.1").setQueueTempPath(queuePath)
+                AnubisConfig.getDefault().setSaraswatiIP("127.0.0.1").setQueueTempPath(queuePath)
         );
 
         int count = 1;
@@ -55,7 +55,7 @@ public class SaraswatiAnubisExample {
             );
             count++;
 
-            boolean sendSuccess = anubis.send(animal);
+            boolean sendSuccess = anubis.sendMessage(animal);
             log.info("Anubis send {} result: {}", animal.getIndex(), sendSuccess);
 
             LockSupport.parkNanos(1_000_000_000L);
@@ -95,7 +95,7 @@ public class SaraswatiAnubisExample {
 
     public static void runAnubisBenchmark(String queuePath) {
         Anubis anubis = new Anubis(
-                AnubisCfg.bestPerf().setSaraswatiIP("127.0.0.1").setQueueTempPath(queuePath)
+                AnubisConfig.bestPerf().setSaraswatiIP("127.0.0.1").setQueueTempPath(queuePath)
         );
 
         int count = 1;
@@ -118,7 +118,7 @@ public class SaraswatiAnubisExample {
 
         for (int i = 0; i < 100_000_000; i++) {
             for (int j = 0; j < 100_000; j++) {
-                anubis.sendAsync(animal, new Promise<>());
+                anubis.sendMessageAsync(animal, new Promise<>());
             }
 
             LockSupport.parkNanos(50_000_000L);

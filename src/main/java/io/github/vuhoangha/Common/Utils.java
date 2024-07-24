@@ -15,6 +15,7 @@ import java.text.MessageFormat;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.locks.LockSupport;
 
 @Slf4j
@@ -84,13 +85,13 @@ public class Utils {
     /**
      * Chạy 1 function trên CPU core / Logical processor
      *
-     * @param taskName                  tên của logic code này
-     * @param isMainTask                đây có phải là luồng chính hay ko
-     * @param bindMainTaskToCore        luồng chính có gắn vào 1 CPU core ko
-     * @param mainTaskCpu               luồng chính có gắn vào logical processor nào ko
-     * @param bindSubTaskToCore         luồng phụ có gắn vào 1 CPU core ko
-     * @param subTaskCpu                luồng phụ có gắn vào logical processor nào ko
-     * @param task                      logic code cần chạy
+     * @param taskName           tên của logic code này
+     * @param isMainTask         đây có phải là luồng chính hay ko
+     * @param bindMainTaskToCore luồng chính có gắn vào 1 CPU core ko
+     * @param mainTaskCpu        luồng chính có gắn vào logical processor nào ko
+     * @param bindSubTaskToCore  luồng phụ có gắn vào 1 CPU core ko
+     * @param subTaskCpu         luồng phụ có gắn vào logical processor nào ko
+     * @param task               logic code cần chạy
      * @return chứa lock và thread chạy luồng này
      */
     public static AffinityCompose runWithThreadAffinity(
@@ -237,6 +238,21 @@ public class Utils {
         } catch (Exception e) {
             log.error("deleteOldFiles in folder {} error", directoryPath, e);
         }
+    }
+
+
+    // ThreadFactory tạo non-daemon threads (JVM đóng mà ko chờ thread này nên thread này có thể đóng bất cứ lúc nào)
+    public static ThreadFactory createNonDaemonThreadFactory(String threadName) {
+        return r -> {
+            Thread t = new Thread(r, threadName);
+            t.setDaemon(false);
+            return t;
+        };
+    }
+
+    // ThreadFactory tạo non-daemon threads
+    public static ThreadFactory createNonDaemonThreadFactory() {
+        return createNonDaemonThreadFactory("Thread-" + System.nanoTime());
     }
 
 
