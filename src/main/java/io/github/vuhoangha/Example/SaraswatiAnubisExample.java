@@ -98,7 +98,7 @@ public class SaraswatiAnubisExample {
     public static void runAnubisBenchmark() {
 
         Anubis anubis = new Anubis(
-                AnubisConfig.standardConfig().setSaraswatiIP("127.0.0.1")
+                AnubisConfig.bestPerformanceConfig().setSaraswatiIP("127.0.0.1")
         );
 
         new Thread(() -> {
@@ -131,12 +131,12 @@ public class SaraswatiAnubisExample {
             }).start();
 
             for (int i = 0; i < 100_000_000; i++) {
-                for (int j = 0; j < 50_000; j++) {
+                for (int j = 0; j < 100_000; j++) {
                     count1.getAndIncrement();
                     anubis.sendMessageAsync(animal, new Promise<>());
                 }
 
-                LockSupport.parkNanos(20_000_000L);
+                LockSupport.parkNanos(50_000_000L);
             }
 
         }).start();

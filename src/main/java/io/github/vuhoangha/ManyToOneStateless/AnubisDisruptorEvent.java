@@ -10,13 +10,13 @@ import java.nio.ByteBuffer;
  */
 public class AnubisDisruptorEvent {
 
-    // dữ liệu gửi đi có dạng ["time_to_live"]["req_id"]["app_data"]
+    // dữ liệu ứng dụng gửi
     public Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
 
     // callback lại cho ứng dụng biết gửi thành công hay không
     public Promise<Boolean> callback;
 
     // thời gian message hết hạn ở local Anubis
-    public long localExpiry;
+    public long sendingTime;
 
 }
