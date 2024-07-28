@@ -1,6 +1,5 @@
 package io.github.vuhoangha.ManyToOneStateless;
 
-import com.lmax.disruptor.*;
 import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.OmniWaitStrategy;
 import lombok.Getter;
@@ -24,23 +23,8 @@ public class AnubisConfig {
     private String saraswatiIP;
     private Integer saraswatiPort = 5590;
 
-    // lắng nghe msg ghi vào queue
-    // chạy trên 1 CPU core hoặc logical processor (Constance.CPU_TYPE) cụ thể ?
-    private Boolean coreForListenQueue;
-    private Integer cpuForListenQueue;
-    // folder chứa queue tạm và reset mỗi khi chạy ứng dụng
-    private String queueTempPath = "anubis_temp_queue";
-    // thời gian tồn tại của 1 file ".cq4" trong chronicle queue temp. Mặc định 5 ngày xóa 1 lần
-    private Long queueTempTtl = (long) 5 * 24 * 60 * 60;
-    // kiểu WaitStrategy để lắng nghe msg trong queue
-    private OmniWaitStrategy queueWaitStrategy;
-
-    // kiểu WaitStrategy được sử dụng bởi Lmax để gom message từ nhiều thread --> ghi vào queue
-    private WaitStrategy disruptorWaitStrategy;
-    // lắng nghe msg được ứng dụng gửi
-    // chạy trên 1 CPU core hoặc logical processor (Constance.CPU_TYPE) cụ thể ?
-    private Boolean coreForReceiveMessage;
-    private Integer cpuForReceiveMessage;
+    // kiểu WaitStrategy được sử dụng để xử lý toàn bộ hoạt động của Anubis
+    private OmniWaitStrategy waitStrategy;
 
     // timeout gửi/nhận message dành cho user (quản lý trên local Anubis)
     private Long localMsgTimeout = 30000L;
@@ -52,25 +36,15 @@ public class AnubisConfig {
         return new AnubisConfig()
                 .setCore(false)
                 .setCpu(Constance.CPU_TYPE.ANY)
-                .setCoreForListenQueue(false)
-                .setCpuForListenQueue(Constance.CPU_TYPE.NONE)
-                .setQueueWaitStrategy(OmniWaitStrategy.YIELD)
-                .setCoreForReceiveMessage(false)
-                .setCpuForReceiveMessage(Constance.CPU_TYPE.NONE)
-                .setDisruptorWaitStrategy(new YieldingWaitStrategy());
+                .setWaitStrategy(OmniWaitStrategy.YIELD);
     }
 
 
     public static AnubisConfig bestPerformanceConfig() {
         return new AnubisConfig()
-                .setCore(false)
+                .setCore(true)
                 .setCpu(Constance.CPU_TYPE.NONE)
-                .setCoreForListenQueue(true)
-                .setCpuForListenQueue(Constance.CPU_TYPE.NONE)
-                .setQueueWaitStrategy(OmniWaitStrategy.BUSY)
-                .setCoreForReceiveMessage(true)
-                .setCpuForReceiveMessage(Constance.CPU_TYPE.NONE)
-                .setDisruptorWaitStrategy(new BusySpinWaitStrategy());
+                .setWaitStrategy(OmniWaitStrategy.BUSY);
     }
 
 
@@ -78,12 +52,7 @@ public class AnubisConfig {
         return new AnubisConfig()
                 .setCore(false)
                 .setCpu(Constance.CPU_TYPE.NONE)
-                .setCoreForListenQueue(false)
-                .setCpuForListenQueue(Constance.CPU_TYPE.NONE)
-                .setQueueWaitStrategy(OmniWaitStrategy.SLEEP)
-                .setCoreForReceiveMessage(false)
-                .setCpuForReceiveMessage(Constance.CPU_TYPE.NONE)
-                .setDisruptorWaitStrategy(new SleepingWaitStrategy());
+                .setWaitStrategy(OmniWaitStrategy.SLEEP);
     }
 
 
