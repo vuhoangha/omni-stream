@@ -49,7 +49,6 @@ public class Saraswati {
             configSocket(socket);
 
             Bytes<ByteBuffer> bytesReq = Bytes.elasticByteBuffer();     // tất cả dữ liệu gửi sang, cấu trúc ["time_to_live"]["req_id"]["data"]
-            Bytes<ByteBuffer> bytesData = Bytes.elasticByteBuffer();    // thông tin dữ liệu gửi sang
 
             while (status == SaraswatiStatus.RUNNING) {
                 try {
@@ -63,8 +62,7 @@ public class Saraswati {
 
                     if (expiry >= System.currentTimeMillis()) {
                         // msg còn hạn sử dụng --> gửi cho ứng dụng
-                        bytesReq.read(bytesData);
-                        messageHandler.accept(bytesData);
+                        messageHandler.accept(bytesReq);
 
                         // phản hồi Anubis confirm nhận được
                         socket.send(clientAddress, ZMQ.SNDMORE);
@@ -76,18 +74,16 @@ public class Saraswati {
                     log.error("Saraswati listen Anubis error", ex);
                 } finally {
                     bytesReq.clear();
-                    bytesData.clear();
                 }
             }
 
             // close & release
             bytesReq.releaseLast();
-            bytesData.releaseLast();
         }
     }
 
     private void configSocket(ZMQ.Socket socket) {
-        socket.setSndHWM(1_000_000);
+        socket.setSndHWM(10_000_000);
         socket.setHeartbeatIvl(10_000);
         socket.setHeartbeatTtl(15_000);
         socket.setHeartbeatTimeout(15_000);

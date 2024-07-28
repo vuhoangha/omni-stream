@@ -234,7 +234,7 @@ public class Anubis {
 
 
         private void setupSocket(ZMQ.Socket socket) {
-            socket.setRcvHWM(1_000_000);
+            socket.setRcvHWM(10_000_000);
             socket.setHeartbeatIvl(30_000);
             socket.setHeartbeatTtl(45_000);
             socket.setHeartbeatTimeout(45_000);
