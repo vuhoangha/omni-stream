@@ -13,6 +13,7 @@ import io.github.vuhoangha.Common.Utils;
 import io.github.vuhoangha.common.IQueueNode;
 import io.github.vuhoangha.common.Promise;
 import io.github.vuhoangha.common.QueueHashMap;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
@@ -47,16 +48,15 @@ public class Anubis {
                 Utils.createNonDaemonThreadFactory(),
                 ProducerType.MULTI,
                 new SleepingWaitStrategy());
-        disruptor.start();
         ringBuffer = disruptor.getRingBuffer();
+        processor = new Processor(config, ringBuffer);
+        ringBuffer.addGatingSequences(processor.getSequence());     // thông báo cho Ring Buffer biết rằng Processor mới chỉ xử lý đến event này thôi, ko cho phép Publisher ghi đè lên các event lớn hơn
+        disruptor.start();
 
         threadGroups.add(Utils.runWithThreadAffinity("Anubis start", true,
                 config.getCore(), config.getCpu(),
                 config.getCore(), config.getCpu(),
-                () -> {
-                    processor = new Processor(config, ringBuffer);
-                    new Thread(processor).start();
-                }));
+                () -> new Thread(processor).start()));
 
         Runtime.getRuntime().addShutdownHook(new Thread(this::onShutdown));
     }
@@ -115,6 +115,7 @@ public class Anubis {
      * cũng nằm trên 1 thread nên gom hết chúng lại vào 1 processor
      */
     @Slf4j
+    @Getter
     static class Processor implements Runnable {
 
         private boolean running = true;
@@ -160,6 +161,7 @@ public class Anubis {
                                 sendMessage(socket, event, ++reqID, sendingBytes);
                                 nextSequence++;
                             }
+                            // TODO thử cập nhật nó cho từng item trong vòng lặp xem sao
                             sequence.set(availableSequence);    // đánh dấu đã xử lý tới event cuối cùng được ghi nhận
                         }
 
@@ -218,15 +220,15 @@ public class Anubis {
         // quét các message đã chờ quá lâu
         private void scanTimeoutMessage(long now) {
             IQueueNode<Long, Long> tail = messageExpiryTimes.getTail();
-            while (tail != null && tail.getValue() < now) {
-                // phản hồi cho user là msg này bị timeout
-                long reqId = tail.getKey();
-                messageExpiryTimes.remove(reqId);
-                Promise<Boolean> cb = messageCallbacks.remove(reqId);
-                if (cb != null) cb.complete(false);
+                while (tail != null && tail.getValue() < now) {
+                    // phản hồi cho user là msg này bị timeout
+                    long reqId = tail.getKey();
+                    messageExpiryTimes.remove(reqId);
+                    Promise<Boolean> cb = messageCallbacks.remove(reqId);
+                    if (cb != null) cb.complete(false);
 
-                // reset tail
-                tail = messageExpiryTimes.getTail();
+                    // reset tail
+                    tail = messageExpiryTimes.getTail();
             }
         }
 
