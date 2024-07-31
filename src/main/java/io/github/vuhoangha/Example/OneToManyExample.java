@@ -27,7 +27,7 @@ public class OneToManyExample {
 
         Utils.deleteFolder(sourcePath);
 
-        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(sourcePath).setCompress(true));
+        Fanout fanout = new Fanout(FanoutConfig.defaultCfg().setQueuePath(sourcePath).setCompress(true));
 
         int count = 1;
         AnimalTest animal = new AnimalTest(
@@ -59,7 +59,7 @@ public class OneToManyExample {
 
         Utils.deleteFolder(path);
 
-        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(path).setCompress(true));
+        Fanout fanout = new Fanout(FanoutConfig.defaultCfg().setQueuePath(path).setCompress(true));
 
         int count = 1;
         AnimalTest animal = new AnimalTest(
@@ -129,7 +129,7 @@ public class OneToManyExample {
 
         Utils.deleteFolder(sourcePath);
 
-        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(sourcePath).setCompress(true));
+        Fanout fanout = new Fanout(FanoutConfig.defaultCfg().setQueuePath(sourcePath).setCompress(true));
 
         LockSupport.parkNanos(5_000_000_000L);
 

@@ -58,16 +58,16 @@ public class Sinkin {
     private long endSyncedSeq = -1;                                                       // sequence kết thúc việc đồng bộ dữ liệu ban đầu từ Fanout
 
 
-    public Sinkin(SinkinCfg cfg, SinkinHandler handler) {
+    public Sinkin(SinkinCfg config, SinkinHandler handler) {
         // validate
-        Utils.checkNull(cfg.getQueuePath(), "Require queuePath");
-        Utils.checkNull(cfg.getSourceIP(), "Require source IP");
+        Utils.checkNull(config.getQueuePath(), "Require queuePath");
+        Utils.checkNull(config.getSourceIP(), "Require source IP");
+        Utils.checkNull(config.getReaderName(), "Require readerName");
         Utils.checkNull(handler, "Require handler");
-        Utils.checkNull(cfg.getReaderName(), "Require readerName");
 
-        config = cfg;
+        this.config = config;
         messageHandler = handler;
-        messagePool = new SynchronizeObjectPool<>(new TranspotMsg[cfg.getMaxObjectsPoolWait()], TranspotMsg::new);
+        messagePool = new SynchronizeObjectPool<>(new TranspotMsg[config.getMaxObjectsPoolWait()], TranspotMsg::new);
         zmqContext = new ZContext();
 
         chronicleQueue = SingleChronicleQueueBuilder
@@ -118,7 +118,7 @@ public class Sinkin {
         try {
             while (status == SinkStatus.SYNCING) {
                 // tổng hợp data rồi req sang src
-                missMsgBytes.writeByte(Constance.FANOUT.CONFIRM.FROM_LATEST);
+                missMsgBytes.writeByte(Constance.FANOUT.FETCH.FROM_LATEST);
                 missMsgBytes.writeLong(latestWriteIndex);
                 socket.send(missMsgBytes.toByteArray(), 0);
                 missMsgBytes.clear();
@@ -310,7 +310,7 @@ public class Sinkin {
     private void checkLatestMsg() {
         missMsgRingBuffer.publishEvent(
                 (newEvent, sequence, __type) -> newEvent.setType(__type),
-                Constance.FANOUT.CONFIRM.LATEST_MSG);
+                Constance.FANOUT.FETCH.LATEST_MSG);
     }
 
 
@@ -425,7 +425,7 @@ public class Sinkin {
                                     newEvent.setIndexFrom(__indexFrom);
                                     newEvent.setIndexTo(__indexTo);
                                 },
-                                Constance.FANOUT.CONFIRM.FROM_TO,
+                                Constance.FANOUT.FETCH.FROM_TO,
                                 latestWriteIndex,
                                 tMsg.getSrcIndex());
                     }
@@ -493,10 +493,10 @@ public class Sinkin {
         try {
             boolean isSuccess = true;
 
-            if (msg.getType() == Constance.FANOUT.CONFIRM.LATEST_MSG) {
+            if (msg.getType() == Constance.FANOUT.FETCH.LATEST_MSG) {
                 // nếu lấy msg cuối cùng
 
-                missMsgBytes.writeByte(Constance.FANOUT.CONFIRM.LATEST_MSG);
+                missMsgBytes.writeByte(Constance.FANOUT.FETCH.LATEST_MSG);
 
                 // gửi đi
                 isSuccess = _zSocket.send(missMsgBytes.toByteArray());
@@ -519,10 +519,10 @@ public class Sinkin {
                                 resData);
                     }
                 }
-            } else if (msg.getType() == Constance.FANOUT.CONFIRM.FROM_TO) {
+            } else if (msg.getType() == Constance.FANOUT.FETCH.FROM_TO) {
                 // nếu lấy các bản ghi from-to index
 
-                missMsgBytes.writeByte(Constance.FANOUT.CONFIRM.FROM_TO);
+                missMsgBytes.writeByte(Constance.FANOUT.FETCH.FROM_TO);
                 missMsgBytes.writeLong(msg.getIndexFrom());
                 missMsgBytes.writeLong(msg.getIndexTo());
 
