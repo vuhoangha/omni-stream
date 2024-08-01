@@ -112,7 +112,7 @@ public class OneToManyExample {
             System.out.println("Animal: " + animalTest);
         };
 
-        new Sinkin(SinkinCfg.builder()
+        new Sinkin(SinkinConfig.builder()
                 .setQueuePath(path)
                 .setSourceIP("127.0.0.1")
                 .setReaderName("onus_spot_market_core")

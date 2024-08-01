@@ -4,7 +4,6 @@ import com.lmax.disruptor.BlockingWaitStrategy;
 import com.lmax.disruptor.WaitStrategy;
 import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.OmniWaitStrategy;
-import io.github.vuhoangha.OneToMany.SinkinCfg;
 
 import java.text.MessageFormat;
 

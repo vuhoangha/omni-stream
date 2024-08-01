@@ -28,11 +28,11 @@ import java.util.concurrent.locks.LockSupport;
  *      - compressed: ["native index"]["sequence"]["compress_data"]
  *      - uncompressed: ["native index"]["sequence"]["data"]
  * latest msg:
- *      - compressed: ["native index"]["sequence"]["compress_data"]
- *      - uncompressed: ["native index"]["sequence"]["data"]
+ *      - compressed: ["type"]["native index"]["sequence"]["compress_data"]
+ *      - uncompressed: ["type"]["native index"]["sequence"]["data"]
  * fetch msg:
- *      - compressed: ["độ dài dữ liệu nén"]["native index"]["sequence"]["compress_data"]
- *      - uncompressed: ["độ dài dữ liệu"]["native index"]["sequence"]["data"]
+ *      - compressed: ["type"]["độ dài dữ liệu nén"]["native index"]["sequence"]["compress_data"]
+ *      - uncompressed: ["type"]["độ dài dữ liệu"]["native index"]["sequence"]["data"]
  */
 @Slf4j
 public class Fanout {
@@ -133,20 +133,20 @@ public class Fanout {
 
 
     /**
-     * lắng nghe các yêu cầu từ sink muốn lấy các msg bị miss
-     * cấu trúc msg gồm 2 phần ["kiểu lấy dữ liệu"]["queue index from"]["queue index to"]
-     * "queue index from": là index msg ngay trước msg miss
+     * lắng nghe các yêu cầu từ Sinkin muốn lấy các msg trong 1 khoảng hoặc msg mới nhất trong queue
+     * cấu trúc request msg gồm: ["kiểu lấy dữ liệu"]["queue index from"]["queue index to"]
+     * "queue index from": là index msg ngay trước msg muốn lấy
      * "queue index to": là index msg đứng sau msg muốn lấy
      * ví dụ có [1,2,3,4,5,6], tôi muốn lấy [3,4,5] thì cần gửi "queue index from": 2, "queue index to": 6
      * dữ liệu ở đây sẽ được trả theo 2 kiểu tùy TYPE
-     * kiểu 1 cho "LATEST_MSG": ["msg type"]["source native index 1"]["seq in queue 1"]["data 1"]
-     * kiểu 2 cho các loại còn lại: ["độ dài data 1"]["source native index 1"]["seq in queue 1"]["data 1"]["độ dài data 2"]["source native index 2"]["seq in queue 2"]["data 2"]
+     * kiểu 1 cho "LATEST_MSG": ["msg type"]["source native index"]["seq in queue"]["data"]
+     * kiểu 2 cho các loại còn lại: ["msg type"]["độ dài data 1"]["source native index 1"]["seq in queue 1"]["data 1"]["độ dài data 2"]["source native index 2"]["seq in queue 2"]["data 2"]
      */
     private void handleMessagesFetchingRequest() {
         log.info("Fanout handle messages fetching request on logical processor {}", Affinity.getCpu());
 
         ExcerptTailer tailer = queue.createTailer();
-        ZMQ.Socket socket = createReplySocket();
+        ZMQ.Socket socket = createRouterSocket();
 
         Bytes<ByteBuffer> bytesFromQueue = Bytes.elasticByteBuffer();       // bytes đọc từ queue ra
         Bytes<ByteBuffer> byteReceived = Bytes.elasticByteBuffer();         // bytes nhận được từ ZeroMQ
@@ -154,15 +154,17 @@ public class Fanout {
 
         while (isRunning) {
             try {
-                byteReceived.write(socket.recv(0));
+                byte[] clientAddress = socket.recv(0);
+                byte[] request = socket.recv(0);
+                byteReceived.write(request);
                 byte type = byteReceived.readByte();
 
                 if (type == Constance.FANOUT.FETCH.LATEST_MSG) {
                     // lấy msg cuối cùng
-                    getLatestMessage(tailer, socket, bytesFromQueue, bytesReply);
+                    getLatestMessage(type, tailer, socket, clientAddress, bytesFromQueue, bytesReply);
                 } else {
                     // lấy msg từ from --> to
-                    getMessagesFromTo(type, tailer, socket, byteReceived, bytesFromQueue, bytesReply);
+                    getMessagesFromTo(type, tailer, socket, clientAddress, byteReceived, bytesFromQueue, bytesReply);
                 }
 
                 byteReceived.clear();
@@ -182,26 +184,30 @@ public class Fanout {
 
 
     // lấy msg gần nhất trong queue và trả về cho client
-    private void getLatestMessage(ExcerptTailer tailer, ZMQ.Socket socket, Bytes<ByteBuffer> bytesFromQueue, Bytes<ByteBuffer> bytesReply) {
+    // ["type"]["native index"]["sequence"]["compress_data"]
+    private void getLatestMessage(byte type, ExcerptTailer tailer, ZMQ.Socket socket, byte[] clientAddress, Bytes<ByteBuffer> bytesFromQueue, Bytes<ByteBuffer> bytesReply) {
         // lấy msg cuối cùng
         tailer.direction(TailerDirection.BACKWARD).toEnd();
 
         if (tailer.readBytes(bytesFromQueue)) {
             // vị trí hiện tại có msg
             long nativeIndex = tailer.lastReadIndex();
+            bytesReply.writeByte(type);
             bytesReply.writeLong(nativeIndex);
             bytesReply.write(bytesFromQueue);
+            socket.send(clientAddress, ZMQ.SNDMORE);
             socket.send(bytesReply.toByteArray(), 0);
             bytesFromQueue.clear();
             bytesReply.clear();
         } else {
             // vị trí hiện tại ko có dữ liệu
+            socket.send(clientAddress, ZMQ.SNDMORE);
             socket.send(emptyByte, 0);
         }
     }
 
 
-    private void getMessagesFromTo(byte type, ExcerptTailer tailer, ZMQ.Socket socket, Bytes<ByteBuffer> byteReceived, Bytes<ByteBuffer> bytesFromQueue, Bytes<ByteBuffer> bytesReply) {
+    private void getMessagesFromTo(byte type, ExcerptTailer tailer, ZMQ.Socket socket, byte[] clientAddress, Bytes<ByteBuffer> byteReceived, Bytes<ByteBuffer> bytesFromQueue, Bytes<ByteBuffer> bytesReply) {
 
         int readMsgCount = 0;
         long fromIndex = byteReceived.readLong();
@@ -228,6 +234,7 @@ public class Fanout {
 
         if (startMoved) {
             // nếu hợp lệ thì lấy msg gửi về
+            bytesReply.writeByte(type);
             while (tailer.readBytes(bytesFromQueue)                                                  // còn msg trong queue để đọc
                     && ++readMsgCount <= config.getBatchSize()                                       // số lượng msg đã đọc chưa vượt quá giới hạn
                     && (type == Constance.FANOUT.FETCH.FROM_LATEST || nextReadIndex < toIndex)) {    // nếu là "FROM_LATEST" thì ko cần quan tâm "toIndex". Còn nếu là "FROM_TO" thì check xem đã đọc tới "toIndex" chưa
@@ -242,10 +249,12 @@ public class Fanout {
                 bytesReply.write(bytesFromQueue);
                 bytesFromQueue.clear();
             }
+            socket.send(clientAddress, ZMQ.SNDMORE);
             socket.send(bytesReply.toByteArray(), 0);
             bytesReply.clear();
         } else {
             // nếu ko hợp lệ thì gửi về dữ liệu rỗng
+            socket.send(clientAddress, ZMQ.SNDMORE);
             socket.send(emptyByte, 0);
         }
     }
@@ -278,8 +287,8 @@ public class Fanout {
     }
 
 
-    private ZMQ.Socket createReplySocket() {
-        ZMQ.Socket socket = zContext.createSocket(SocketType.REP);
+    private ZMQ.Socket createRouterSocket() {
+        ZMQ.Socket socket = zContext.createSocket(SocketType.ROUTER);
         socket.setSndHWM(10_000_000);
         socket.setRcvHWM(10_000_000);
         socket.setHeartbeatIvl(10_000);

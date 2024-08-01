@@ -83,6 +83,7 @@ public class Saraswati {
     }
 
     private void configSocket(ZMQ.Socket socket) {
+        socket.setRcvHWM(10_000_000);
         socket.setSndHWM(10_000_000);
         socket.setHeartbeatIvl(10_000);
         socket.setHeartbeatTtl(15_000);

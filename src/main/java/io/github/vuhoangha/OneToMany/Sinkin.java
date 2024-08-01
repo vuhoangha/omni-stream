@@ -1,11 +1,9 @@
 package io.github.vuhoangha.OneToMany;
 
-import com.lmax.disruptor.BlockingWaitStrategy;
-import com.lmax.disruptor.RingBuffer;
-import com.lmax.disruptor.dsl.Disruptor;
-import com.lmax.disruptor.dsl.ProducerType;
 import io.github.vuhoangha.Common.*;
 import io.github.vuhoangha.common.SynchronizeObjectPool;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
@@ -20,46 +18,32 @@ import org.zeromq.ZMQ;
 import java.nio.ByteBuffer;
 import java.text.MessageFormat;
 import java.util.*;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
 /*
- * lưu vào queue:
- *      - compress true: ["src native index"]["sequence"]["compress_data"]
- *      - compress false: ["src native index"]["sequence"]["data"]
+ *  lưu vào queue:
+ *      - compressed: ["src native index"]["sequence"]["compress_data"]
+ *      - uncompressed: ["src native index"]["sequence"]["data"]
  */
 @Slf4j
 public class Sinkin {
 
-    private enum SinkStatus {IDLE, SYNCING, RUNNING, STOP}
+    private enum SinkStatus {SYNCING, RUNNING, STOP}
 
-    private SinkStatus status;                                                            // quản lý trạng thái của Sinkin
-
-    ScheduledExecutorService checkMsgExecutor = Executors.newScheduledThreadPool(1);
-    private final NavigableMap<Long, TranspotMsg> waitingMessages = new TreeMap<>();      // TODO đoạn này xem xét tự viết 1 kiểu dữ liệu tương tự nhưng performance tốt hơn
-    private final SynchronizeObjectPool<TranspotMsg> messagePool;
-    private final SinkinCfg config;
-    private final SingleChronicleQueue chronicleQueue;
-    private final ExcerptAppender chronicleAppender;
-    private long latestWriteSequence;                                                     // số thứ tự của msg trong queue. Được đánh bởi bên Fanout
-    private long latestWriteIndex;                                                        // src index của item mới nhất trong queue
-    private final ZContext zmqContext;
-    private final Bytes<ByteBuffer> missMsgBytes = Bytes.elasticByteBuffer();             // dùng để tạo data lấy msg miss
-    private final Bytes<ByteBuffer> processMsgBytes = Bytes.elasticByteBuffer();          // dùng để tạo data xử lý msg
-    private Disruptor<SinkProcessMsg> processMsgDisruptor;
-    private RingBuffer<SinkProcessMsg> processMsgRingBuffer;
-    private Disruptor<CheckMissMsg> missMsgDisruptor;
-    private RingBuffer<CheckMissMsg> missMsgRingBuffer;
-    private SinkinMissCheckerProcessor missCheckerProcessor;
+    private SinkStatus status = SinkStatus.SYNCING;                                       // quản lý trạng thái của Sinkin
+    private final NavigableMap<Long, PendingMessage> pendingMessages = new TreeMap<>();   // TODO đoạn này xem xét tự viết 1 kiểu dữ liệu tương tự nhưng performance tốt hơn
+    private final SynchronizeObjectPool<PendingMessage> messagePool;
+    private final SinkinConfig config;
+    private final SingleChronicleQueue queue;
+    private final ZContext zContext = new ZContext();
     List<AffinityCompose> affinityComposes = Collections.synchronizedList(new ArrayList<>());
     private final SinkinHandler messageHandler;
-    private long endSyncedSeq = -1;                                                       // sequence kết thúc việc đồng bộ dữ liệu ban đầu từ Fanout
+    private long latestWriteSequence;                                                     // số thứ tự của msg trong queue. Được đánh bởi bên Fanout
+    private long latestWriteIndex;                                                        // src index của item mới nhất trong Fanout queue
+    private long lastSequenceAfterSync = -1;                                              // sequence kết thúc việc đồng bộ dữ liệu ban đầu từ Fanout
 
 
-    public Sinkin(SinkinCfg config, SinkinHandler handler) {
-        // validate
+    public Sinkin(SinkinConfig config, SinkinHandler handler) {
         Utils.checkNull(config.getQueuePath(), "Require queuePath");
         Utils.checkNull(config.getSourceIP(), "Require source IP");
         Utils.checkNull(config.getReaderName(), "Require readerName");
@@ -67,271 +51,288 @@ public class Sinkin {
 
         this.config = config;
         messageHandler = handler;
-        messagePool = new SynchronizeObjectPool<>(new TranspotMsg[config.getMaxObjectsPoolWait()], TranspotMsg::new);
-        zmqContext = new ZContext();
+        messagePool = new SynchronizeObjectPool<>(new PendingMessage[config.getMessagePoolSize()], PendingMessage::new);
+        queue = SingleChronicleQueueBuilder.binary(config.getQueuePath()).rollCycle(config.getRollCycles()).build();
+        syncLatestQueueInfo();
 
-        chronicleQueue = SingleChronicleQueueBuilder
-                .binary(config.getQueuePath())
-                .rollCycle(config.getRollCycles())
-                .build();
-        chronicleAppender = chronicleQueue.acquireAppender();
-
-        LongLongObject lastestInfo = getLatestInfo();
-
-        if (lastestInfo != null) {
-            latestWriteIndex = lastestInfo.valueA;
-            if (lastestInfo.valueB != chronicleQueue.entryCount()) {
-                throw new RuntimeException(MessageFormat.format("Sequence in queue not match, latestInfo {0}, entryCount {1}", lastestInfo.valueB, chronicleQueue.entryCount()));
-            } else {
-                latestWriteSequence = chronicleQueue.entryCount();   // tổng số item trong queue
-            }
-        } else {
-            latestWriteIndex = -1;
-            latestWriteSequence = 0;
-        }
-
-        status = SinkStatus.SYNCING;
-        LockSupport.parkNanos(100_000_000L);
-
-        // chạy đồng bộ dữ liệu với source trước
+        // chạy đồng bộ dữ liệu với Fanout trước
         new Thread(this::sync).start();
-
-        // được chạy khi JVM bắt đầu quá trình shutdown
         Runtime.getRuntime().addShutdownHook(new Thread(this::onShutdown));
     }
 
 
     /**
-     * Hàm này sẽ đồng bộ hoàn toàn msg từ src --> sink. Khi đã hoàn thành thì mới sub msg mới
+     * Hàm này sẽ đồng bộ tất cả msg từ Fanout --> Sinkin. Khi đã hoàn thành thì mới subscriber message mới
      * cấu trúc request: ["type"]["src index"]
-     * Cấu trúc response: ["msg_1"]["msg_2"]...vvv
+     * Cấu trúc response: ["type"]["msg_1"]["msg_2"]...vvv
      * cấu trúc từng msg con msg_1, msg_2..vv:  ["độ dài data 1]["source native index 1"]["sequence 1"]["data nén 1"]["độ dài data 2]["source native index 2"]["sequence 2"]["data nén 2"]
      */
     private void sync() {
-        ZMQ.Socket socket = zmqContext.createSocket(SocketType.REQ);
-        socket.connect(config.getConfirmUrl());
+        ZMQ.Socket socket = zContext.createSocket(SocketType.DEALER);
+        socket.connect(config.getDealerUrl());
 
-        ExcerptAppender localAppender = chronicleQueue.acquireAppender();
-        Bytes<ByteBuffer> byteRes = Bytes.elasticByteBuffer();              // chứa byte[] của tất cả bản ghi trả về
-        Bytes<ByteBuffer> byteToQueue = Bytes.elasticByteBuffer();          // chứa byte[] để ghi vào queue
+        ExcerptAppender localAppender = queue.acquireAppender();
+        Bytes<ByteBuffer> byteResponse = Bytes.elasticByteBuffer();             // chứa byte[] của tất cả bản ghi trả về
+        Bytes<ByteBuffer> byteToQueue = Bytes.elasticByteBuffer();              // chứa byte[] để ghi vào queue
+        Bytes<ByteBuffer> msgFetchingBytes = Bytes.elasticByteBuffer();         // dùng để tạo data lấy msg miss
 
         try {
             while (status == SinkStatus.SYNCING) {
-                // tổng hợp data rồi req sang src
-                missMsgBytes.writeByte(Constance.FANOUT.FETCH.FROM_LATEST);
-                missMsgBytes.writeLong(latestWriteIndex);
-                socket.send(missMsgBytes.toByteArray(), 0);
-                missMsgBytes.clear();
+                // tổng hợp data rồi req sang Fanout
+                msgFetchingBytes.writeByte(Constance.FANOUT.FETCH.FROM_LATEST);
+                msgFetchingBytes.writeLong(latestWriteIndex);
+                socket.send(msgFetchingBytes.toByteArray(), 0);
+                msgFetchingBytes.clear();
 
                 // chờ dữ liệu trả về
                 byte[] repData = socket.recv(0);
-
-                // nếu đã hết msg thì thôi
                 if (repData.length == 0) break;
 
                 log.info("Sinkin syncing......");
 
                 // đọc tuần tự và xử lý
-                byteRes.write(repData);
+                byteResponse.write(repData);
+                byteResponse.readSkip(1);   // "type" ko cần nên bỏ qua
+                while (byteResponse.readRemaining() > 0) {
+                    // cấu trúc data: ["độ dài data]["source native index"]["sequence"]["data"]
+                    int dataLen = byteResponse.readInt();
+                    byteToQueue.write(byteResponse, byteResponse.readPosition(), 8 + 8 + dataLen);
+                    long sourceIndex = byteResponse.readLong();
+                    long sequence = byteResponse.readLong();
+                    byteResponse.readSkip(dataLen); // bỏ qua data chính
 
-                while (byteRes.readRemaining() > 0) {
-                    // cấu trúc data ["độ dài data]["source native index"]["sequence"]["data"][
-
-                    // độ dài dữ liệu nén
-                    int dataLen = byteRes.readInt();
-
-                    // lấy phần dữ liệu để ghi vào queue
-                    byteToQueue.write(byteRes, byteRes.readPosition(), 8 + 8 + dataLen);
-
-                    long srcIndex = byteRes.readLong();
-                    long seq = byteRes.readLong();
-                    byteRes.readSkip(dataLen);              // bỏ qua data chính
-
-                    if (seq != latestWriteSequence + 1) {
-                        log.error("Sinkin _sync not sequence, src_seq: {}, sink_seq: {}", seq, latestWriteSequence);
+                    if (sequence != latestWriteSequence + 1) {
+                        log.error("Sinkin sync not sequence, src_seq: {}, sink_seq: {}", sequence, latestWriteSequence);
                         return;
                     }
 
-                    // update seq và native index
-                    latestWriteSequence = seq;
-                    latestWriteIndex = srcIndex;
-
-                    // write to queue
+                    latestWriteSequence = sequence;
+                    latestWriteIndex = sourceIndex;
                     localAppender.writeBytes(byteToQueue);
-
-                    // clear temp data
                     byteToQueue.clear();
                 }
-
-                byteRes.clear();
+                byteResponse.clear();
             }
 
             log.info("Sinkin synced");
 
-            endSyncedSeq = latestWriteSequence;
+            lastSequenceAfterSync = latestWriteSequence;
             status = SinkStatus.RUNNING;
             LockSupport.parkNanos(100_000_000L);
 
-            // khởi tạo luồng chính
-            affinityComposes.add(
-                    Utils.runWithThreadAffinity(
-                            "Sinkin ALL",
-                            true,
-                            config.getEnableBindingCore(),
-                            config.getCpu(),
-                            config.getEnableBindingCore(),
-                            config.getCpu(),
-                            this::mainProcess));
+            // realtime message từ Fanout về
+            affinityComposes.add(Utils.runWithThreadAffinity("Sinkin processor", false, false, Constance.CPU_TYPE.NONE,
+                    config.getProcessorCore(), config.getProcessorCpu(), this::processor));
+
+            // đọc từ queue và gửi cho ứng dụng
+            affinityComposes.add(Utils.runWithThreadAffinity("Sinkin listen queue", false, false, Constance.CPU_TYPE.NONE,
+                    config.getQueueCore(), config.getQueueCpu(), this::listenQueue));
+
         } catch (Exception ex) {
             log.error("Sinkin sync error", ex);
         } finally {
             // giải phóng tài nguyên
             localAppender.close();
-            byteRes.releaseLast();
-            byteToQueue.releaseLast();
             socket.close();
+            byteResponse.releaseLast();
+            byteToQueue.releaseLast();
+            msgFetchingBytes.releaseLast();
 
             log.info("Sinkin synced done !");
         }
     }
 
 
-    // luồng xử lý logic chính sau khi đã đồng bộ dữ liệu xong
-    private void mainProcess() {
+    // chạy luồng realtime và control message từ Fanout
+    private void processor() {
+        ZMQ.Socket subSocket = createSubSocket();
+        ZMQ.Socket dealerSocket = createDealerSocket();
+        Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
+        ExcerptAppender appender = queue.acquireAppender();
+        long latestMessageFetchInterval = config.getLatestMessageFetchInterval();
+        long lostMessageScanInterval = config.getLostMessageScanInterval();
+        long nextLatestMessageFetchTime = System.currentTimeMillis() + latestMessageFetchInterval;
+        long nextLostMessageScanTime = System.currentTimeMillis() + lostMessageScanInterval;
 
-        log.info("Sinkin run main flow on logical processor {}", Affinity.getCpu());
+        while (status == SinkStatus.RUNNING) {
+            try {
+                // lấy message realtime
+                byte[] realtimeBytes = subSocket.recv(ZMQ.NOBLOCK);
+                if (realtimeBytes != null) {
+                    bytes.write(realtimeBytes);
+                    boolean messageProcessed = processRealtimeBytes(bytes, appender);
+                    if (messageProcessed) scanPendingMessages(appender);
+                    bytes.clear();
+                }
 
-        // khởi tạo disruptor xử lý các msg chính
-        affinityComposes.add(
-                Utils.runWithThreadAffinity(
-                        "Sinkin Disruptor Process Msg",
-                        false,
-                        config.getEnableBindingCore(),
-                        config.getCpu(),
-                        config.getEnableDisruptorProcessMsgBindingCore(),
-                        config.getDisruptorProcessMsgCpu(),
-                        this::initDisruptorProcessMsg));
+                // lấy latest_message / from_to_message
+                byte[] fetchingMessageBytes = dealerSocket.recv(ZMQ.NOBLOCK);
+                if (fetchingMessageBytes != null) {
+                    bytes.write(fetchingMessageBytes);
+                    byte type = bytes.readByte();
+                    if (type == Constance.FANOUT.FETCH.LATEST_MSG) {
+                        boolean messageProcessed = processLatestMessage(bytes, appender);
+                        if (messageProcessed) scanPendingMessages(appender);
+                    } else if (type == Constance.FANOUT.FETCH.FROM_TO) {
+                        boolean messageProcessed = processFromToMessage(bytes, appender);
+                        if (messageProcessed) scanPendingMessages(appender);
+                    }
+                    bytes.clear();
+                }
 
-        // định kỳ kiểm tra các msg bị miss hoặc chờ quá lâu không
-        this.initCheckMissMsg();
+                // định kỳ request latest message
+                if (nextLatestMessageFetchTime >= System.currentTimeMillis()) {
+                    nextLatestMessageFetchTime += latestMessageFetchInterval;
+                    bytes.writeByte(Constance.FANOUT.FETCH.LATEST_MSG);
+                    dealerSocket.send(bytes.toByteArray(), 0);
+                    bytes.clear();
+                }
 
-        // lắng nghe các msg được ghi vào queue và chuyển nó tới ứng dụng
-        affinityComposes.add(
-                Utils.runWithThreadAffinity(
-                        "Sinkin Sub Queue",
-                        false,
-                        config.getEnableBindingCore(),
-                        config.getCpu(),
-                        config.getEnableCheckMissMsgAndSubQueueBindingCore(),
-                        config.getCheckMissMsgAndSubQueueCpu(),
-                        () -> new Thread(this::onWriteQueue).start()));
+                // định kỳ quét các msg bị miss
+                if (nextLostMessageScanTime >= System.currentTimeMillis()) {
+                    nextLostMessageScanTime += lostMessageScanInterval;
+                    if (!pendingMessages.isEmpty()) {
+                        PendingMessage msg = pendingMessages.firstEntry().getValue();
+                        if (msg.expiryTime < System.currentTimeMillis()) {
+                            bytes.writeByte(Constance.FANOUT.FETCH.FROM_TO);
+                            bytes.writeLong(latestWriteIndex);
+                            bytes.writeLong(msg.sourceIndex);
+                            dealerSocket.send(bytes.toByteArray(), 0);
+                            bytes.clear();
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.error("Sinkin processor error", e);
 
-        // lắng nghe các msg Fanout gửi sang và đẩy vào xử lý rồi lưu vào queue
-        affinityComposes.add(
-                Utils.runWithThreadAffinity(
-                        "Sinkin Sub Msg",
-                        false,
-                        config.getEnableBindingCore(),
-                        config.getCpu(),
-                        config.getEnableSubMsgBindingCore(),
-                        config.getSubMsgCpu(),
-                        () -> new Thread(this::subMsg).start()));
+                // khởi tạo lại socket cho chắc
+                subSocket.close();
+                dealerSocket.close();
+                subSocket = createSubSocket();
+                dealerSocket = createDealerSocket();
+                LockSupport.parkNanos(2_000_000_000L);
+            }
+        }
+
+        subSocket.close();
+        dealerSocket.close();
+        appender.close();
+        bytes.releaseLast();
     }
 
 
-    /**
-     * xử lý các msg được gửi tới và lưu vào queue
-     * sau đó check xem còn msg chờ trong cache ko thì lấy ra xử lý
-     * Nhận xử lý từ các nơi sau:
-     * các msg đến từ pub/sub
-     * các miss msg
-     * các yêu cầu check miss msg
-     */
-    private void initDisruptorProcessMsg() {
-        log.info("Sinkin run disruptor process msg on logical processor {}", Affinity.getCpu());
+    // dữ liệu dạng: ["source index"]["sequence"]["data"]
+    private boolean processRealtimeBytes(Bytes<ByteBuffer> bytes, ExcerptAppender appender) {
+        long sourceIndex = bytes.readLong();
+        long sequence = bytes.readLong();
+        bytes.readPosition(0);  // reset lại con trỏ đọc từ đầu
 
-        processMsgDisruptor = new Disruptor<>(
-                SinkProcessMsg::new,
-                config.getRingBufferSize(),
-                Executors.newSingleThreadExecutor(),
-                ProducerType.MULTI,
-                config.getWaitStrategy());
-        processMsgDisruptor.handleEventsWith((event, sequence, endOfBatch) -> this.onMsg(event));
-        processMsgDisruptor.start();
-        processMsgRingBuffer = processMsgDisruptor.getRingBuffer();
+        if (sequence <= latestWriteSequence) {                // message đã xử lý thì bỏ qua
+            return false;
+        } else if (sequence == latestWriteSequence + 1) {      // message kế tiếp thì xử lý
+            latestWriteSequence = sequence;
+            latestWriteIndex = sourceIndex;
+            appender.writeBytes(bytes);
+            return true;
+        } else {                                              // "message > current + 1" thì đẩy vào hàng chờ
+            PendingMessage pendingMessage = messagePool.pop();
+            pendingMessage.sequence = sequence;
+            pendingMessage.sourceIndex = sourceIndex;
+            pendingMessage.queueBytes.write(bytes);
+            pendingMessage.expiryTime = System.currentTimeMillis() + config.getMessageExpirationDuration();
+            pendingMessages.put(sequence, pendingMessage);
+            return false;
+        }
     }
 
 
-    /**
-     * Check các msg bị miss
-     */
-    private void initCheckMissMsg() {
+    // dữ liệu dạng: ["type"]["source index"]["sequence"]["data"]
+    // bên ngoài đã đọc "type" của nó nên read_position đang đứng ở "type" rồi
+    private boolean processLatestMessage(Bytes<ByteBuffer> bytes, ExcerptAppender appender) {
+        long sourceIndex = bytes.readLong();
+        long sequence = bytes.readLong();
+        bytes.readPosition(1);  // reset con trỏ đọc về vị trí "type"
 
-        /*
-         * Check xem có msg nào bị miss ko
-         * Có 2 chế độ là "lấy msg mới nhất" và "lấy msg nằm giữa 2 index"
-         */
-        missMsgDisruptor = new Disruptor<>(
-                CheckMissMsg::new,
-                2 << 7,    // 256
-                Executors.newSingleThreadExecutor(),
-                ProducerType.MULTI,
-                new BlockingWaitStrategy());
-        missMsgDisruptor.start();
-        missMsgRingBuffer = missMsgDisruptor.getRingBuffer();
-
-        // lắng nghe các yêu cầu lấy msg bị miss
-        missCheckerProcessor = new SinkinMissCheckerProcessor(
-                missMsgRingBuffer,
-                missMsgRingBuffer.newBarrier(),
-                zmqContext,
-                config.getConfirmUrl(),
-                config.getTimeoutSendReqMissMsg(),
-                config.getTimeoutRecvReqMissMsg(),
-                this::onMissMsgReq);
-        new Thread(missCheckerProcessor).start();
-
-        /*
-         * định kỳ check xem có msg mới ko
-         * định kỳ check xem msg trong hàng đợi có chờ quá lâu ko
-         */
-        checkMsgExecutor.scheduleAtFixedRate(this::checkLatestMsg, 1000, config.getTimeRateGetLatestMsgMS(), TimeUnit.MILLISECONDS);
-        checkMsgExecutor.scheduleAtFixedRate(this::checkLongTimeMsg, 10, config.getTimeRateGetMissMsgMS(), TimeUnit.MILLISECONDS);
+        if (sequence <= latestWriteSequence) {                // message đã xử lý thì bỏ qua
+            return false;
+        } else if (sequence == latestWriteSequence + 1) {     // message kế tiếp thì xử lý
+            latestWriteSequence = sequence;
+            latestWriteIndex = sourceIndex;
+            appender.writeBytes(bytes);
+            return true;
+        } else {                                              // "message > current + 1" thì đẩy vào hàng chờ
+            PendingMessage pendingMessage = messagePool.pop();
+            pendingMessage.sequence = sequence;
+            pendingMessage.sourceIndex = sourceIndex;
+            pendingMessage.queueBytes.write(bytes);
+            pendingMessage.expiryTime = System.currentTimeMillis() + config.getMessageExpirationDuration();
+            pendingMessages.put(sequence, pendingMessage);
+            return false;
+        }
     }
 
 
-    /**
-     * định kỳ lấy bản ghi mới nhất từ queue về
-     * trong luồng chính xử lý msg, nếu bản ghi này đã tồn tại thì bỏ qua
-     * nếu là bản ghi tiếp theo thì xử lý
-     * nếu là bản ghi xa hơn nữa thì để vào trong hàng chờ
-     * nếu lâu quá chưa được xử lý thì sẽ có "checkLongTimeMsg" định kỳ check để lấy ra xử lý
-     */
-    private void checkLatestMsg() {
-        missMsgRingBuffer.publishEvent(
-                (newEvent, sequence, __type) -> newEvent.setType(__type),
-                Constance.FANOUT.FETCH.LATEST_MSG);
+    // ["msg type"]["độ dài data 1"]["source native index 1"]["seq in queue 1"]["data 1"]["độ dài data 2"]["source native index 2"]["seq in queue 2"]["data 2"]
+    private boolean processFromToMessage(Bytes<ByteBuffer> bytes, ExcerptAppender appender) {
+        int messageProcessed = 0;
+
+        while (bytes.readRemaining() > 0) {
+            long oldReadPosition = bytes.readPosition();
+            long oldReadLimit = bytes.readLimit();
+            int dataLength = bytes.readInt();
+            long sourceIndex = bytes.readLong();
+            long sequence = bytes.readLong();
+
+            // giới hạn data có thể đọc của bytes
+            bytes.readPosition(oldReadPosition + 4);
+            bytes.readLimit(oldReadPosition + 4 + 8 + 8 + dataLength);
+
+            if (sequence == latestWriteSequence + 1) {
+                // message kế tiếp thì xử lý
+                latestWriteSequence = sequence;
+                latestWriteIndex = sourceIndex;
+                appender.writeBytes(bytes);
+                messageProcessed++;
+            } else if (sequence > latestWriteSequence + 1) {
+                // "message > current + 1" thì đẩy vào hàng chờ
+                PendingMessage pendingMessage = messagePool.pop();
+                pendingMessage.sequence = sequence;
+                pendingMessage.sourceIndex = sourceIndex;
+                pendingMessage.queueBytes.write(bytes);
+                pendingMessage.expiryTime = System.currentTimeMillis() + config.getMessageExpirationDuration();
+                pendingMessages.put(sequence, pendingMessage);
+            }
+
+            // trả lại read_position và read_limit chính xác cho "bytes" để xử lý message tiếp theo
+            bytes.readPosition(oldReadPosition + 4 + 8 + 8 + dataLength);
+            bytes.readLimit(oldReadLimit);
+        }
+
+        return messageProcessed > 0;
     }
 
 
-    /**
-     * đẩy vào trong luồng xử lý msg chính để lấy ra các msg đã vào nhưng lâu được xử lý
-     */
-    private void checkLongTimeMsg() {
-        processMsgRingBuffer.publishEvent(
-                (newEvent, sequence, __type) -> newEvent.setType(__type),
-                Constance.SINKIN.PROCESS_MSG_TYPE.CHECK_MISS);
+    // quét xem có message nào hợp lệ để xử lý trong danh sách message chờ không ?
+    private void scanPendingMessages(ExcerptAppender appender) {
+        while (!pendingMessages.isEmpty() && pendingMessages.firstKey() <= latestWriteSequence + 1) {
+            long currentSequence = pendingMessages.firstKey();
+            PendingMessage message = pendingMessages.remove(currentSequence);
+            if (currentSequence == latestWriteSequence + 1) {
+                latestWriteSequence = message.sequence;
+                latestWriteIndex = message.sourceIndex;
+                appender.writeBytes(message.queueBytes);
+            }
+
+            // clear data và trả về pool
+            message.queueBytes.clear();
+            messagePool.push(message);
+        }
     }
 
 
-    /**
-     * Sub các msg được src stream sang
-     */
-    private void subMsg() {
-        log.info("Sinkin run subscribe msg on logical processor {}", Affinity.getCpu());
-
-        ZMQ.Socket subscriber = zmqContext.createSocket(SocketType.SUB);
-        subscriber.setRcvHWM(config.getZmqSubBufferSize());   // setting buffer size các msg được nhận
+    private ZMQ.Socket createSubSocket() {
+        ZMQ.Socket subSocket = zContext.createSocket(SocketType.SUB);
+        subSocket.setRcvHWM(config.getZmqSubBufferSize());   // setting buffer size các msg được nhận
 
         /*
          * setHeartbeatIvl: interval gửi heartbeat
@@ -340,297 +341,99 @@ public class Sinkin {
          * setReconnectIVL: interval time reconnect lại nếu connect tới server gặp lỗi
          * setReconnectIVLMax: trong zmq, sau mỗi lần reconnect ko thành công, nó sẽ x2 thời gian chờ lên và connect lại. Giá trị sau khi x2 cũng ko vượt quá "setReconnectIVLMax"
          */
-        subscriber.setHeartbeatIvl(10000);
-        subscriber.setHeartbeatTtl(15000);
-        subscriber.setHeartbeatTimeout(15000);
-        subscriber.setReconnectIVL(10000);
-        subscriber.setReconnectIVLMax(10000);
+        subSocket.setHeartbeatIvl(10_000);
+        subSocket.setHeartbeatTtl(15_000);
+        subSocket.setHeartbeatTimeout(15_000);
+        subSocket.setReconnectIVL(10_000);
+        subSocket.setReconnectIVLMax(10_000);
 
-        subscriber.connect(config.getRealTimeUrl());
-        subscriber.subscribe(ZMQ.SUBSCRIPTION_ALL);     // nhận tất cả tin nhắn từ publisher
+        subSocket.connect(config.getRealTimeUrl());
+        subSocket.subscribe(ZMQ.SUBSCRIPTION_ALL);     // nhận tất cả tin nhắn từ publisher
 
-        log.info("Sinkin start subscribe");
+        return subSocket;
+    }
 
-        // Nhận và xử lý tin nhắn
-        while (status == SinkStatus.RUNNING) {
-            try {
-                byte[] msg = subscriber.recv(0);
-                processMsgRingBuffer.publishEvent(
-                        (newEvent, sequence, __bytesData) -> newEvent.setType(__bytesData[0]).setData(__bytesData),     // vì byte đầu tiên luôn là type nên ta lấy luôn
-                        msg);
-            } catch (Exception ex) {
-                log.error("Sinkin SubMsg error", ex);
-            }
-        }
-
-        subscriber.close();
-        log.info("Sinkin end subscribe");
+    private ZMQ.Socket createDealerSocket() {
+        ZMQ.Socket socket = zContext.createSocket(SocketType.DEALER);
+        socket.setRcvHWM(10_000_000);
+        socket.setHeartbeatIvl(30_000);
+        socket.setHeartbeatTtl(45_000);
+        socket.setHeartbeatTimeout(45_000);
+        socket.setReconnectIVL(10_000);
+        socket.setReconnectIVLMax(10_000);
+        socket.connect(config.getDealerUrl());
+        return socket;
     }
 
 
-    /**
-     * Nhận xử lý từ các nơi sau:
-     * các msg đến từ pub/sub
-     * các miss msg
-     * các yêu cầu check miss msg
-     */
-    private void onMsg(SinkProcessMsg event) {
+    // lấy các chỉ số sequence và source native index của message cuối cùng
+    private void syncLatestQueueInfo() {
         try {
-            if (event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.MSG) {
-                // chỉ có 1 msg duy nhất. Cấu trúc ["msg type"]["source native index"]["seq in queue"]["data"]
-
-                processMsgBytes.write(event.getData());
-
-                TranspotMsg tMsg = messagePool.pop();
-
-                tMsg.getQueueData().write(processMsgBytes, 1, processMsgBytes.readLimit() - 1);
-
-                processMsgBytes.readSkip(1);       // byte đầu ko cần nên bỏ
-                tMsg.setSrcIndex(processMsgBytes.readLong());
-                tMsg.setSeq(processMsgBytes.readLong());
-                processMsgBytes.read(tMsg.getData(), (int) processMsgBytes.readRemaining());
-
-                processOneMsg(tMsg);
-
-                processMsgBytes.clear();
-            } else if (event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.MULTI_MSG) {
-                // có thể có nhiều msg
-
-                processMsgBytes.write(event.getData());
-
-                // đọc cho tới khi nào hết data thì thôi
-                while (processMsgBytes.readRemaining() > 0) {
-                    TranspotMsg tMsg = messagePool.pop();
-
-                    // Cấu trúc: ["độ dài data 1"]["source native index 1"]["seq in queue 1"]["data 1"]["độ dài data 2"]["source native index 2"]["seq in queue 2"]["data 2"]
-                    int dataLen = processMsgBytes.readInt();
-                    tMsg.getQueueData().write(processMsgBytes, processMsgBytes.readPosition(), 8 + 8 + dataLen);    // đọc nhưng ko ảnh hưởng readPosition trong _byte_process_msg
-                    tMsg.setSrcIndex(processMsgBytes.readLong());
-                    tMsg.setSeq(processMsgBytes.readLong());
-                    processMsgBytes.read(tMsg.getData(), dataLen);
-
-                    processOneMsg(tMsg);
-                }
-
-                processMsgBytes.clear();
-            } else if (event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.CHECK_MISS) {
-                // nếu hàng chờ còn msg và nó đã chờ quá lâu --> lấy các msg miss ở giữa
-                // nếu ko có msg chờ thì bỏ qua
-                if (!waitingMessages.isEmpty()) {
-                    TranspotMsg tMsg = waitingMessages.firstEntry().getValue();
-                    if (tMsg.getRcvTime() + config.getMaxTimeWaitMS() < System.currentTimeMillis()) {
-                        missMsgRingBuffer.publishEvent(
-                                (newEvent, sequence, __type, __indexFrom, __indexTo) -> {
-                                    newEvent.setType(__type);
-                                    newEvent.setIndexFrom(__indexFrom);
-                                    newEvent.setIndexTo(__indexTo);
-                                },
-                                Constance.FANOUT.FETCH.FROM_TO,
-                                latestWriteIndex,
-                                tMsg.getSrcIndex());
-                    }
-                }
-            }
-
-            // check xem trong hàng đợi có msg kế tiếp không ?
-            if (event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.MSG || event.getType() == Constance.SINKIN.PROCESS_MSG_TYPE.MULTI_MSG) {
-                while (!waitingMessages.isEmpty() && waitingMessages.firstKey() <= latestWriteSequence + 1) {
-                    long firstKey = waitingMessages.firstKey();
-                    TranspotMsg tMsg = waitingMessages.remove(firstKey);      // lấy msg chờ và xóa khỏi hàng chờ
-                    if (firstKey == latestWriteSequence + 1) {
-                        latestWriteSequence = tMsg.getSeq();
-                        latestWriteIndex = tMsg.getSrcIndex();
-                        chronicleAppender.writeBytes(tMsg.getQueueData());                           // ghi vào queue
-                    }
-
-                    // clear data và trả về pool
-                    tMsg.clear();
-                    messagePool.push(tMsg);
-                }
-            }
-        } catch (Exception ex) {
-            log.error("Sinkin OnMsg error", ex);
-        }
-    }
-
-
-    // xử lý 1 msg hoàn chỉnh
-    private void processOneMsg(TranspotMsg tMsg) {
-        try {
-            if (tMsg.getSeq() <= latestWriteSequence) {
-                // msg đã xử lý thì bỏ qua
-                // trả về pool
-                tMsg.clear();
-                messagePool.push(tMsg);
-            } else if (tMsg.getSeq() == latestWriteSequence + 1) {
-                // nếu là msg tiếp theo --> ghi vào trong queue
-                latestWriteSequence = tMsg.getSeq();
-                latestWriteIndex = tMsg.getSrcIndex();
-                chronicleAppender.writeBytes(tMsg.getQueueData());
-                // trả về pool
-                tMsg.clear();
-                messagePool.push(tMsg);
-            } else {
-                // msg lớn hơn "current + 1" thì đẩy vào trong hệ thống chờ kèm thời gian
-                tMsg.setRcvTime(System.currentTimeMillis());
-                waitingMessages.put(tMsg.getSeq(), tMsg);
-            }
-        } catch (Exception ex) {
-            // trả về pool
-            tMsg.clear();
-            messagePool.push(tMsg);
-            log.error("Sinkin ProcessOneMsg error", ex);
-        }
-    }
-
-
-    /**
-     * lấy msg mới nhất của src
-     * xử lý các yêu cầu lấy msg bị miss từ [index_from, index_to]
-     * trả về "true" nếu việc gửi/nhận thành công và ngược lại
-     */
-    private boolean onMissMsgReq(ZMQ.Socket _zSocket, CheckMissMsg msg) {
-        try {
-            boolean isSuccess = true;
-
-            if (msg.getType() == Constance.FANOUT.FETCH.LATEST_MSG) {
-                // nếu lấy msg cuối cùng
-
-                missMsgBytes.writeByte(Constance.FANOUT.FETCH.LATEST_MSG);
-
-                // gửi đi
-                isSuccess = _zSocket.send(missMsgBytes.toByteArray());
-                missMsgBytes.clear();
-
-                if (!isSuccess) {
-                    // ko gửi được msg
-
-                    log.error("Get latest msg fail. Maybe TIMEOUT !");
-                } else {
-                    // gửi thành công và nhận về
-                    byte[] resData = _zSocket.recv();
-
-                    if (resData == null) {
-                        log.error("Rep latest msg empty. Maybe TIMEOUT !");
-                        isSuccess = false;
-                    } else if (resData.length > 0) {
-                        processMsgRingBuffer.publishEvent(
-                                (newEvent, sequence, __bytesData) -> newEvent.setType(__bytesData[0]).setData(__bytesData),
-                                resData);
-                    }
-                }
-            } else if (msg.getType() == Constance.FANOUT.FETCH.FROM_TO) {
-                // nếu lấy các bản ghi from-to index
-
-                missMsgBytes.writeByte(Constance.FANOUT.FETCH.FROM_TO);
-                missMsgBytes.writeLong(msg.getIndexFrom());
-                missMsgBytes.writeLong(msg.getIndexTo());
-
-                // gửi đi
-                isSuccess = _zSocket.send(missMsgBytes.toByteArray());
-                missMsgBytes.clear();
-
-                if (!isSuccess) {
-                    // ko gửi được msg
-                    log.error(MessageFormat.format("Get items from {0} - to {1} fail. Maybe TIMEOUT !", msg.getIndexFrom(), msg.getIndexTo()));
-                } else {
-                    // nhận về
-                    byte[] resData = _zSocket.recv();
-                    if (resData == null) {
-                        log.error(MessageFormat.format("Rep items from {0} - to {1} fail. Maybe TIMEOUT !", msg.getIndexFrom(), msg.getIndexTo()));
-                        isSuccess = false;
-                    } else if (resData.length > 0) {
-                        processMsgRingBuffer.publishEvent(
-                                (newEvent, sequence, __type, __bytesData) -> newEvent.setType(__type).setData(__bytesData),
-                                Constance.SINKIN.PROCESS_MSG_TYPE.MULTI_MSG, resData);
-                    }
-                }
-            }
-
-            return isSuccess;
-        } catch (Exception ex) {
-            log.error("Sinkin OnMissMsgReq error, msg {}", msg.toString(), ex);
-            return false;
-        }
-    }
-
-
-    /**
-     * lấy index của item cuối cùng trong queue
-     * mục đích là để xác định vị trí cuối cùng đã đồng bộ từ Source từ đó tiếp tục đồng bộ
-     * valueA: src native index
-     * valueB: sequence
-     */
-    private LongLongObject getLatestInfo() {
-        try {
-            if (chronicleQueue.lastIndex() >= 0) {
+            if (queue.lastIndex() >= 0) {
                 Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
-
-                ExcerptTailer tailer = chronicleQueue.createTailer();
-                tailer.moveToIndex(chronicleQueue.lastIndex());
+                ExcerptTailer tailer = queue.createTailer();
+                tailer.moveToIndex(queue.lastIndex());
                 tailer.readBytes(bytes);
 
-                LongLongObject result = new LongLongObject(bytes.readLong(), bytes.readLong());
-
+                latestWriteIndex = bytes.readLong();
+                latestWriteSequence = bytes.readLong();
+                if (latestWriteSequence != queue.entryCount()) {
+                    throw new RuntimeException(MessageFormat.format("Sequence in queue not match, latestWriteSequence {0}, entryCount {1}", latestWriteSequence, queue.entryCount()));
+                }
                 bytes.releaseLast();
-
-                return result;
+            } else {
+                latestWriteIndex = -1;
+                latestWriteSequence = 0;
             }
         } catch (Exception ex) {
-            log.error("Sinkin GetLatestIndex error", ex);
+            log.error("Sinkin sync latest queue info error", ex);
+            throw new RuntimeException(ex);
         }
-        return null;
     }
 
 
-    /**
-     * lắng nghe các event được viết vào queue và call cho "Handler"
-     */
-    private void onWriteQueue() {
-
+    // gửi cho ứng dụng nếu có message mới
+    private void listenQueue() {
         log.info("Sinkin listen queue on logical processor {}", Affinity.getCpu());
 
         Bytes<ByteBuffer> bytesRead = Bytes.elasticByteBuffer();
         Bytes<ByteBuffer> bytesDecompress = Bytes.elasticByteBuffer();
         Bytes<ByteBuffer> bytesData = Bytes.elasticByteBuffer();
 
-        // tạo 1 tailer. Mặc định nó sẽ đọc từ lần cuối cùng nó đọc
-        ExcerptTailer tailer = chronicleQueue.createTailer(config.getReaderName());
+        // di chuyển con trỏ đọc về nơi mong muốn
+        ExcerptTailer tailer = queue.createTailer(config.getReaderName());
         if (config.getStartId() == -1) {
-
             // nếu có yêu cầu replay từ đầu queue
             tailer.toStart();
         } else if (config.getStartId() >= 0) {
-
             // vì khi dùng hàm "moveToIndex" thì lần đọc tiếp theo là chính bản ghi có index đó
             //      --> phải đọc trước 1 lần để tăng con trỏ đọc lên
             if (tailer.moveToIndex(config.getStartId())) {
                 tailer.readBytes(bytesRead);
                 bytesRead.clear();
             } else {
-                log.error("Collection tailer fail because invalid index {}", config.getStartId());
+                log.error("Sinkin tailer fail because invalid index {}", config.getStartId());
             }
         }
 
         Runnable waiter = OmniWaitStrategy.getWaiter(config.getQueueWaitStrategy());
-
-        while (status == SinkStatus.RUNNING || status == SinkStatus.SYNCING) {
+        while (status == SinkStatus.RUNNING) {
             try {
                 if (tailer.readBytes(bytesRead)) {
-                    bytesRead.readSkip(8);      // bỏ qua src index
-                    long seq = bytesRead.readLong();
+                    bytesRead.readSkip(8);  // bỏ qua src index
+                    long sequence = bytesRead.readLong();
 
                     if (config.getCompress()) {
-                        // giải nén
+                        // dữ liệu bị nén
                         byte[] compressedBytes = new byte[(int) bytesRead.readRemaining()];
-                        bytesRead.read(compressedBytes); // Đọc toàn bộ dữ liệu nén của msg này
+                        bytesRead.read(compressedBytes);
                         byte[] decompressData = Lz4Compressor.decompressData(compressedBytes);
                         bytesDecompress.write(decompressData);
-
-                        messageHandler.apply(tailer.lastReadIndex(), seq, endSyncedSeq, bytesDecompress);
+                        messageHandler.apply(tailer.lastReadIndex(), sequence, lastSequenceAfterSync, bytesDecompress);
                     } else {
-                        bytesRead.read(bytesData, (int) bytesRead.readRemaining());
-                        messageHandler.apply(tailer.lastReadIndex(), seq, endSyncedSeq, bytesData);
+                        // dữ liệu ko bị nén
+                        bytesRead.read(bytesData);
+                        messageHandler.apply(tailer.lastReadIndex(), sequence, lastSequenceAfterSync, bytesData);
                     }
 
                     bytesRead.clear();
@@ -644,15 +447,16 @@ public class Sinkin {
                 bytesData.clear();
                 bytesDecompress.clear();
 
-                log.error("Sinkin OnWriteQueue error", ex);
+                log.error("Sinkin listen queue error", ex);
             }
         }
 
         bytesRead.releaseLast();
         bytesData.releaseLast();
+        bytesDecompress.releaseLast();
         tailer.close();
 
-        log.info("Sinkin subscribe write queue closed");
+        log.info("Sinkin listen queue closed");
     }
 
 
@@ -664,40 +468,34 @@ public class Sinkin {
         log.info("Sinkin closing...");
 
         status = SinkStatus.STOP;
-        LockSupport.parkNanos(500_000_000);
-
-        // close zeromq, ngừng nhận msg mới
-        zmqContext.destroy();
-
-        // turnoff miss check processor, ngừng việc lấy các msg thiếu và msg mới nhất
-        checkMsgExecutor.shutdownNow();
-        missCheckerProcessor.halt();
-        missMsgDisruptor.shutdown();
-
-        // close disruptor, ngừng nhận msg mới, xử lý nốt msg trong ring_buffer
-        processMsgDisruptor.shutdown();
-        // ngừng 2s để xử lý nốt msg trong ring buffer
+        zContext.destroy(); // close zeromq, ngừng nhận msg mới
         LockSupport.parkNanos(1_000_000_000);
-
-        // close chronicle queue
-        chronicleAppender.close();
-        chronicleQueue.close();
-
-        // object pool
+        queue.close();
         messagePool.clear();
 
-        // byte
-        missMsgBytes.releaseLast();
-
         // giải phóng các CPU core / Logical processor đã sử dụng
-        for (AffinityCompose affinityCompose : affinityComposes) {
-            affinityCompose.release();
-        }
-
-        LockSupport.parkNanos(500_000_000);
+        affinityComposes.forEach(AffinityCompose::release);
 
         log.info("Sinkin CLOSED !");
     }
 
+
+    @Getter
+    @Setter
+    static class PendingMessage {
+
+        // số thứ tự của message trong queue
+        private long sequence;
+
+        // index trong native queue ở src
+        private long sourceIndex;
+
+        // thời gian tối đa mà msg nằm trong hàng chờ. Nếu lâu hơn thời gian này thì coi như các msg nằm giữa "sequence cuối cùng xử lý" và "nó" đã bị loss. Cần chủ động request lấy lại
+        private long expiryTime;
+
+        // dữ liệu dùng để ghi thẳng vào queue. Cấu trúc ["source native index"]["seq in queue"]["data"]
+        private final Bytes<ByteBuffer> queueBytes = Bytes.elasticByteBuffer();
+
+    }
 
 }
