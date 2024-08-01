@@ -44,6 +44,7 @@ public class Fanout {
     private final ExcerptAppender appender;
     private final Bytes<ByteBuffer> queueBuffer = Bytes.elasticByteBuffer();      // dữ liệu để ghi vào queue
     private final Bytes<ByteBuffer> eventBuffer = Bytes.elasticByteBuffer();      // dữ liệu được đọc ra từ đối tượng muốn ghi vào queue
+    private final ZContext zContext = new ZContext();
     private final List<AffinityCompose> affinityManager = Collections.synchronizedList(new ArrayList<>());
     private final byte[] emptyByte = new byte[0];
 
@@ -89,47 +90,45 @@ public class Fanout {
     private void listenToQueue() {
         log.info("Fanout listen queue on logical processor {}", Affinity.getCpu());
 
-        try (ZContext zContext = new ZContext()) {
-            ExcerptTailer tailer = queue.createTailer();
-            ZMQ.Socket socket = createPubSocket(zContext);
-            Bytes<ByteBuffer> bytesFromQueue = Bytes.elasticByteBuffer();
-            Bytes<ByteBuffer> bytesForPub = Bytes.elasticByteBuffer();
-            Runnable waiter = OmniWaitStrategy.getWaiter(config.getQueueWaitStrategy());
+        ExcerptTailer tailer = queue.createTailer();
+        ZMQ.Socket socket = createPubSocket();
+        Bytes<ByteBuffer> bytesFromQueue = Bytes.elasticByteBuffer();
+        Bytes<ByteBuffer> bytesForPub = Bytes.elasticByteBuffer();
+        Runnable waiter = OmniWaitStrategy.getWaiter(config.getQueueWaitStrategy());
 
-            // di chuyển tới bản ghi cuối cùng và lắng nghe các msg kế tiếp
-            tailer.toEnd();
+        // di chuyển tới bản ghi cuối cùng và lắng nghe các msg kế tiếp
+        tailer.toEnd();
 
-            while (isRunning) {
-                try {
-                    if (tailer.readBytes(bytesFromQueue)) {
-                        // ["source native index"]["seq in queue"]["data"]
-                        bytesForPub.writeLong(tailer.lastReadIndex());
-                        bytesForPub.write(bytesFromQueue);
-                        socket.send(bytesForPub.toByteArray(), 0);
-                        bytesFromQueue.clear();
-                        bytesForPub.clear();
-                    } else {
-                        waiter.run();
-                    }
-                } catch (Exception ex) {
+        while (isRunning) {
+            try {
+                if (tailer.readBytes(bytesFromQueue)) {
+                    // ["source native index"]["seq in queue"]["data"]
+                    bytesForPub.writeLong(tailer.lastReadIndex());
+                    bytesForPub.write(bytesFromQueue);
+                    socket.send(bytesForPub.toByteArray(), 0);
                     bytesFromQueue.clear();
                     bytesForPub.clear();
-                    log.error("Fanout listen queue error", ex);
-
-                    // khởi tạo lại socket cho chắc
-                    socket.close();
-                    socket = createPubSocket(zContext);
-                    LockSupport.parkNanos(500_000_000L);
+                } else {
+                    waiter.run();
                 }
+            } catch (Exception ex) {
+                bytesFromQueue.clear();
+                bytesForPub.clear();
+                log.error("Fanout listen queue error", ex);
+
+                // khởi tạo lại socket cho chắc
+                socket.close();
+                socket = createPubSocket();
+                LockSupport.parkNanos(500_000_000L);
             }
-
-            socket.close();
-            tailer.close();
-            bytesFromQueue.releaseLast();
-            bytesForPub.releaseLast();
-
-            log.info("Fanout closing listen queue");
         }
+
+        socket.close();
+        tailer.close();
+        bytesFromQueue.releaseLast();
+        bytesForPub.releaseLast();
+
+        log.info("Fanout closing listen queue");
     }
 
 
@@ -146,43 +145,41 @@ public class Fanout {
     private void handleMessagesFetchingRequest() {
         log.info("Fanout handle messages fetching request on logical processor {}", Affinity.getCpu());
 
-        try (ZContext zContext = new ZContext()) {
-            ExcerptTailer tailer = queue.createTailer();
-            ZMQ.Socket socket = createRouterSocket(zContext);
+        ExcerptTailer tailer = queue.createTailer();
+        ZMQ.Socket socket = createRouterSocket();
 
-            Bytes<ByteBuffer> bytesFromQueue = Bytes.elasticByteBuffer();       // bytes đọc từ queue ra
-            Bytes<ByteBuffer> byteReceived = Bytes.elasticByteBuffer();         // bytes nhận được từ ZeroMQ
-            Bytes<ByteBuffer> bytesReply = Bytes.elasticByteBuffer();           // bytes phản hồi cho người lấy. Cấu trúc ["msg_1"]["msg_2"]...vvv. Client đọc tuần tự từng field từng msg
+        Bytes<ByteBuffer> bytesFromQueue = Bytes.elasticByteBuffer();       // bytes đọc từ queue ra
+        Bytes<ByteBuffer> byteReceived = Bytes.elasticByteBuffer();         // bytes nhận được từ ZeroMQ
+        Bytes<ByteBuffer> bytesReply = Bytes.elasticByteBuffer();           // bytes phản hồi cho người lấy. Cấu trúc ["msg_1"]["msg_2"]...vvv. Client đọc tuần tự từng field từng msg
 
-            while (isRunning) {
-                try {
-                    byte[] clientAddress = socket.recv(0);
-                    byte[] request = socket.recv(0);
-                    byteReceived.write(request);
-                    byte type = byteReceived.readByte();
+        while (isRunning) {
+            try {
+                byte[] clientAddress = socket.recv(0);
+                byte[] request = socket.recv(0);
+                byteReceived.write(request);
+                byte type = byteReceived.readByte();
 
-                    if (type == Constance.FANOUT.FETCH.LATEST_MSG) {
-                        // lấy msg cuối cùng
-                        getLatestMessage(type, tailer, socket, clientAddress, bytesFromQueue, bytesReply);
-                    } else {
-                        // lấy msg từ from --> to
-                        getMessagesFromTo(type, tailer, socket, clientAddress, byteReceived, bytesFromQueue, bytesReply);
-                    }
-
-                    byteReceived.clear();
-                } catch (Exception ex) {
-                    log.error("Fanout handle messages fetching request error", ex);
+                if (type == Constance.FANOUT.FETCH.LATEST_MSG) {
+                    // lấy msg cuối cùng
+                    getLatestMessage(type, tailer, socket, clientAddress, bytesFromQueue, bytesReply);
+                } else {
+                    // lấy msg từ from --> to
+                    getMessagesFromTo(type, tailer, socket, clientAddress, byteReceived, bytesFromQueue, bytesReply);
                 }
+
+                byteReceived.clear();
+            } catch (Exception ex) {
+                log.error("Fanout handle messages fetching request error", ex);
             }
-
-            tailer.close();
-            socket.close();
-            bytesFromQueue.releaseLast();
-            byteReceived.releaseLast();
-            bytesReply.releaseLast();
-
-            log.info("Fanout closing handle messages fetching request");
         }
+
+        tailer.close();
+        socket.close();
+        bytesFromQueue.releaseLast();
+        byteReceived.releaseLast();
+        bytesReply.releaseLast();
+
+        log.info("Fanout closing handle messages fetching request");
     }
 
 
@@ -290,7 +287,7 @@ public class Fanout {
     }
 
 
-    private ZMQ.Socket createRouterSocket(ZContext zContext) {
+    private ZMQ.Socket createRouterSocket() {
         ZMQ.Socket socket = zContext.createSocket(SocketType.ROUTER);
         socket.setSndHWM(10_000_000);
         socket.setRcvHWM(10_000_000);
@@ -306,7 +303,7 @@ public class Fanout {
      * setHeartbeatTtl: báo cho client biết sau bao lâu ko có msg bất kỳ thì client tự hiểu là connect này đã bị chết. Client có thể tạo 1 connect mới để kết nối lại
      * setHeartbeatTimeout: kể từ lúc gửi msg ping, sau 1 thời gian mà ko có msg mới nào gửi tới qua socket này thì kết nối coi như đã chết. Nó sẽ hủy kết nối này và giải phóng tài nguyên
      */
-    private ZMQ.Socket createPubSocket(ZContext zContext) {
+    private ZMQ.Socket createPubSocket() {
         ZMQ.Socket socket = zContext.createSocket(SocketType.PUB);
         socket.setSndHWM(10_000_000);               // Thiết lập HWM cho socket. Default = 1000
         socket.setHeartbeatIvl(10_000);
@@ -323,6 +320,7 @@ public class Fanout {
         isRunning = false;
         LockSupport.parkNanos(1_000_000_000);
 
+        zContext.destroy();
         appender.close();
         queue.close();
         queueBuffer.releaseLast();
