@@ -1,6 +1,5 @@
 package io.github.vuhoangha.Example;
 
-import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.SinkinHandler;
 import io.github.vuhoangha.Common.Utils;
 import io.github.vuhoangha.Example.structure_example.AnimalTest;
@@ -27,7 +26,7 @@ public class OneToManyExample {
 
         Utils.deleteFolder(sourcePath);
 
-        Fanout fanout = new Fanout(FanoutConfig.defaultCfg().setQueuePath(sourcePath).setCompress(true));
+        Fanout fanout = new Fanout(FanoutConfig.standardConfig().setQueuePath(sourcePath).setCompress(true));
 
         int count = 1;
         AnimalTest animal = new AnimalTest(
@@ -59,7 +58,7 @@ public class OneToManyExample {
 
         Utils.deleteFolder(path);
 
-        Fanout fanout = new Fanout(FanoutConfig.defaultCfg().setQueuePath(path).setCompress(true));
+        Fanout fanout = new Fanout(FanoutConfig.standardConfig().setQueuePath(path).setCompress(true));
 
         int count = 1;
         AnimalTest animal = new AnimalTest(
@@ -112,13 +111,11 @@ public class OneToManyExample {
             System.out.println("Animal: " + animalTest);
         };
 
-        new Sinkin(SinkinConfig.builder()
+        new Sinkin(SinkinConfig.standardConfig()
                 .setQueuePath(path)
                 .setSourceIP("127.0.0.1")
                 .setReaderName("onus_spot_market_core")
                 .setStartId(-1L)
-                .setSubMsgCpu(Constance.CPU_TYPE.ANY)
-                .setDisruptorProcessMsgCpu(Constance.CPU_TYPE.ANY)
                 .setCompress(true), handler);
 
     }
@@ -129,7 +126,7 @@ public class OneToManyExample {
 
         Utils.deleteFolder(sourcePath);
 
-        Fanout fanout = new Fanout(FanoutConfig.defaultCfg().setQueuePath(sourcePath).setCompress(true));
+        Fanout fanout = new Fanout(FanoutConfig.standardConfig().setQueuePath(sourcePath).setCompress(true));
 
         LockSupport.parkNanos(5_000_000_000L);
 
