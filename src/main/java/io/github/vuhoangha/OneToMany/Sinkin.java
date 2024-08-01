@@ -35,7 +35,6 @@ public class Sinkin {
     private final SynchronizeObjectPool<PendingMessage> messagePool;
     private final SinkinConfig config;
     private final SingleChronicleQueue queue;
-    private final ZContext zContext = new ZContext();
     List<AffinityCompose> affinityComposes = Collections.synchronizedList(new ArrayList<>());
     private final SinkinHandler messageHandler;
     private long latestWriteSequence;                                                     // số thứ tự của msg trong queue. Được đánh bởi bên Fanout
@@ -68,156 +67,158 @@ public class Sinkin {
      * cấu trúc từng msg con msg_1, msg_2..vv:  ["độ dài data 1]["source native index 1"]["sequence 1"]["data nén 1"]["độ dài data 2]["source native index 2"]["sequence 2"]["data nén 2"]
      */
     private void sync() {
-        ZMQ.Socket socket = zContext.createSocket(SocketType.DEALER);
-        socket.connect(config.getDealerUrl());
+        try (ZContext zContext = new ZContext(); ZMQ.Socket socket = zContext.createSocket(SocketType.DEALER);) {
+            socket.connect(config.getDealerUrl());
 
-        ExcerptAppender localAppender = queue.acquireAppender();
-        Bytes<ByteBuffer> byteResponse = Bytes.elasticByteBuffer();             // chứa byte[] của tất cả bản ghi trả về
-        Bytes<ByteBuffer> byteToQueue = Bytes.elasticByteBuffer();              // chứa byte[] để ghi vào queue
-        Bytes<ByteBuffer> msgFetchingBytes = Bytes.elasticByteBuffer();         // dùng để tạo data lấy msg miss
+            ExcerptAppender localAppender = queue.acquireAppender();
+            Bytes<ByteBuffer> byteResponse = Bytes.elasticByteBuffer();             // chứa byte[] của tất cả bản ghi trả về
+            Bytes<ByteBuffer> byteToQueue = Bytes.elasticByteBuffer();              // chứa byte[] để ghi vào queue
+            Bytes<ByteBuffer> msgFetchingBytes = Bytes.elasticByteBuffer();         // dùng để tạo data lấy msg miss
 
-        try {
-            while (status == SinkStatus.SYNCING) {
-                // tổng hợp data rồi req sang Fanout
-                msgFetchingBytes.writeByte(Constance.FANOUT.FETCH.FROM_LATEST);
-                msgFetchingBytes.writeLong(latestWriteIndex);
-                socket.send(msgFetchingBytes.toByteArray(), 0);
-                msgFetchingBytes.clear();
+            try {
+                while (status == SinkStatus.SYNCING) {
+                    // tổng hợp data rồi req sang Fanout
+                    msgFetchingBytes.writeByte(Constance.FANOUT.FETCH.FROM_LATEST);
+                    msgFetchingBytes.writeLong(latestWriteIndex);
+                    socket.send(msgFetchingBytes.toByteArray(), 0);
+                    msgFetchingBytes.clear();
 
-                // chờ dữ liệu trả về
-                byte[] repData = socket.recv(0);
-                if (repData.length == 0) break;
+                    // chờ dữ liệu trả về. Dữ liệu null hoặc chỉ chứa 1 byte duy nhất là "type" ở đầu chứng tỏ đã đồng bộ dữ liệu hoàn toàn
+                    byte[] repData = socket.recv(0);
+                    if (repData == null || repData.length <= 1) break;
 
-                log.info("Sinkin syncing......");
+                    log.info("Sinkin syncing......");
 
-                // đọc tuần tự và xử lý
-                byteResponse.write(repData);
-                byteResponse.readSkip(1);   // "type" ko cần nên bỏ qua
-                while (byteResponse.readRemaining() > 0) {
-                    // cấu trúc data: ["độ dài data]["source native index"]["sequence"]["data"]
-                    int dataLen = byteResponse.readInt();
-                    byteToQueue.write(byteResponse, byteResponse.readPosition(), 8 + 8 + dataLen);
-                    long sourceIndex = byteResponse.readLong();
-                    long sequence = byteResponse.readLong();
-                    byteResponse.readSkip(dataLen); // bỏ qua data chính
+                    // đọc tuần tự và xử lý
+                    byteResponse.write(repData);
+                    byteResponse.readSkip(1);   // "type" ko cần nên bỏ qua
+                    while (byteResponse.readRemaining() > 0) {
+                        // cấu trúc data: ["độ dài data]["source native index"]["sequence"]["data"]
+                        int dataLen = byteResponse.readInt();
+                        byteToQueue.write(byteResponse, byteResponse.readPosition(), 8 + 8 + dataLen);
+                        long sourceIndex = byteResponse.readLong();
+                        long sequence = byteResponse.readLong();
+                        byteResponse.readSkip(dataLen); // bỏ qua data chính
 
-                    if (sequence != latestWriteSequence + 1) {
-                        log.error("Sinkin sync not sequence, src_seq: {}, sink_seq: {}", sequence, latestWriteSequence);
-                        return;
+                        if (sequence != latestWriteSequence + 1) {
+                            log.error("Sinkin sync not sequence, src_seq: {}, sink_seq: {}", sequence, latestWriteSequence);
+                            return;
+                        }
+
+                        latestWriteSequence = sequence;
+                        latestWriteIndex = sourceIndex;
+                        localAppender.writeBytes(byteToQueue);
+                        byteToQueue.clear();
                     }
-
-                    latestWriteSequence = sequence;
-                    latestWriteIndex = sourceIndex;
-                    localAppender.writeBytes(byteToQueue);
-                    byteToQueue.clear();
+                    byteResponse.clear();
                 }
-                byteResponse.clear();
+
+                log.info("Sinkin synced");
+
+                lastSequenceAfterSync = latestWriteSequence;
+                status = SinkStatus.RUNNING;
+                LockSupport.parkNanos(100_000_000L);
+
+                // realtime message từ Fanout về
+                affinityComposes.add(Utils.runWithThreadAffinity("Sinkin processor", false, false, Constance.CPU_TYPE.NONE,
+                        config.getProcessorCore(), config.getProcessorCpu(), this::processor));
+
+                // đọc từ queue và gửi cho ứng dụng
+                affinityComposes.add(Utils.runWithThreadAffinity("Sinkin listen queue", false, false, Constance.CPU_TYPE.NONE,
+                        config.getQueueCore(), config.getQueueCpu(), this::listenQueue));
+
+            } catch (Exception ex) {
+                log.error("Sinkin sync error", ex);
+            } finally {
+                // giải phóng tài nguyên
+                localAppender.close();
+                byteResponse.releaseLast();
+                byteToQueue.releaseLast();
+                msgFetchingBytes.releaseLast();
+
+                log.info("Sinkin synced done !");
             }
-
-            log.info("Sinkin synced");
-
-            lastSequenceAfterSync = latestWriteSequence;
-            status = SinkStatus.RUNNING;
-            LockSupport.parkNanos(100_000_000L);
-
-            // realtime message từ Fanout về
-            affinityComposes.add(Utils.runWithThreadAffinity("Sinkin processor", false, false, Constance.CPU_TYPE.NONE,
-                    config.getProcessorCore(), config.getProcessorCpu(), this::processor));
-
-            // đọc từ queue và gửi cho ứng dụng
-            affinityComposes.add(Utils.runWithThreadAffinity("Sinkin listen queue", false, false, Constance.CPU_TYPE.NONE,
-                    config.getQueueCore(), config.getQueueCpu(), this::listenQueue));
-
-        } catch (Exception ex) {
-            log.error("Sinkin sync error", ex);
-        } finally {
-            // giải phóng tài nguyên
-            localAppender.close();
-            socket.close();
-            byteResponse.releaseLast();
-            byteToQueue.releaseLast();
-            msgFetchingBytes.releaseLast();
-
-            log.info("Sinkin synced done !");
         }
     }
 
 
     // chạy luồng realtime và control message từ Fanout
     private void processor() {
-        ZMQ.Socket subSocket = createSubSocket();
-        ZMQ.Socket dealerSocket = createDealerSocket();
-        Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
-        ExcerptAppender appender = queue.acquireAppender();
-        long latestMessageFetchInterval = config.getLatestMessageFetchInterval();
-        long lostMessageScanInterval = config.getLostMessageScanInterval();
-        long nextLatestMessageFetchTime = System.currentTimeMillis() + latestMessageFetchInterval;
-        long nextLostMessageScanTime = System.currentTimeMillis() + lostMessageScanInterval;
+        try (ZContext zContextForSub = new ZContext(); ZContext zContextForDealer = new ZContext()) {
+            ZMQ.Socket subSocket = createSubSocket(zContextForSub);
+            ZMQ.Socket dealerSocket = createDealerSocket(zContextForDealer);
+            Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
+            ExcerptAppender appender = queue.acquireAppender();
+            long latestMessageFetchInterval = config.getLatestMessageFetchInterval();
+            long lostMessageScanInterval = config.getLostMessageScanInterval();
+            long nextLatestMessageFetchTime = System.currentTimeMillis() + latestMessageFetchInterval;
+            long nextLostMessageScanTime = System.currentTimeMillis() + lostMessageScanInterval;
 
-        while (status == SinkStatus.RUNNING) {
-            try {
-                // lấy message realtime
-                byte[] realtimeBytes = subSocket.recv(ZMQ.NOBLOCK);
-                if (realtimeBytes != null) {
-                    bytes.write(realtimeBytes);
-                    boolean messageProcessed = processRealtimeBytes(bytes, appender);
-                    if (messageProcessed) scanPendingMessages(appender);
-                    bytes.clear();
-                }
-
-                // lấy latest_message / from_to_message
-                byte[] fetchingMessageBytes = dealerSocket.recv(ZMQ.NOBLOCK);
-                if (fetchingMessageBytes != null) {
-                    bytes.write(fetchingMessageBytes);
-                    byte type = bytes.readByte();
-                    if (type == Constance.FANOUT.FETCH.LATEST_MSG) {
-                        boolean messageProcessed = processLatestMessage(bytes, appender);
+            while (status == SinkStatus.RUNNING) {
+                try {
+                    // lấy message realtime
+                    byte[] realtimeBytes = subSocket.recv(ZMQ.NOBLOCK);
+                    if (realtimeBytes != null) {
+                        bytes.write(realtimeBytes);
+                        boolean messageProcessed = processRealtimeBytes(bytes, appender);
                         if (messageProcessed) scanPendingMessages(appender);
-                    } else if (type == Constance.FANOUT.FETCH.FROM_TO) {
-                        boolean messageProcessed = processFromToMessage(bytes, appender);
-                        if (messageProcessed) scanPendingMessages(appender);
+                        bytes.clear();
                     }
-                    bytes.clear();
-                }
 
-                // định kỳ request latest message
-                if (nextLatestMessageFetchTime >= System.currentTimeMillis()) {
-                    nextLatestMessageFetchTime += latestMessageFetchInterval;
-                    bytes.writeByte(Constance.FANOUT.FETCH.LATEST_MSG);
-                    dealerSocket.send(bytes.toByteArray(), 0);
-                    bytes.clear();
-                }
+                    // lấy latest_message / from_to_message
+                    byte[] fetchingMessageBytes = dealerSocket.recv(ZMQ.NOBLOCK);
+                    if (fetchingMessageBytes != null) {
+                        bytes.write(fetchingMessageBytes);
+                        byte type = bytes.readByte();
+                        if (type == Constance.FANOUT.FETCH.LATEST_MSG) {
+                            boolean messageProcessed = processLatestMessage(bytes, appender);
+                            if (messageProcessed) scanPendingMessages(appender);
+                        } else if (type == Constance.FANOUT.FETCH.FROM_TO) {
+                            boolean messageProcessed = processFromToMessage(bytes, appender);
+                            if (messageProcessed) scanPendingMessages(appender);
+                        }
+                        bytes.clear();
+                    }
 
-                // định kỳ quét các msg bị miss
-                if (nextLostMessageScanTime >= System.currentTimeMillis()) {
-                    nextLostMessageScanTime += lostMessageScanInterval;
-                    if (!pendingMessages.isEmpty()) {
-                        PendingMessage msg = pendingMessages.firstEntry().getValue();
-                        if (msg.expiryTime < System.currentTimeMillis()) {
-                            bytes.writeByte(Constance.FANOUT.FETCH.FROM_TO);
-                            bytes.writeLong(latestWriteIndex);
-                            bytes.writeLong(msg.sourceIndex);
-                            dealerSocket.send(bytes.toByteArray(), 0);
-                            bytes.clear();
+                    // định kỳ request latest message
+                    if (nextLatestMessageFetchTime >= System.currentTimeMillis()) {
+                        nextLatestMessageFetchTime += latestMessageFetchInterval;
+                        bytes.writeByte(Constance.FANOUT.FETCH.LATEST_MSG);
+                        dealerSocket.send(bytes.toByteArray(), 0);
+                        bytes.clear();
+                    }
+
+                    // định kỳ quét các msg bị miss
+                    if (nextLostMessageScanTime >= System.currentTimeMillis()) {
+                        nextLostMessageScanTime += lostMessageScanInterval;
+                        if (!pendingMessages.isEmpty()) {
+                            PendingMessage msg = pendingMessages.firstEntry().getValue();
+                            if (msg.expiryTime < System.currentTimeMillis()) {
+                                bytes.writeByte(Constance.FANOUT.FETCH.FROM_TO);
+                                bytes.writeLong(latestWriteIndex);
+                                bytes.writeLong(msg.sourceIndex);
+                                dealerSocket.send(bytes.toByteArray(), 0);
+                                bytes.clear();
+                            }
                         }
                     }
+                } catch (Exception e) {
+                    log.error("Sinkin processor error", e);
+
+                    // khởi tạo lại socket cho chắc
+                    subSocket.close();
+                    dealerSocket.close();
+                    subSocket = createSubSocket(zContextForSub);
+                    dealerSocket = createDealerSocket(zContextForDealer);
+                    LockSupport.parkNanos(2_000_000_000L);
                 }
-            } catch (Exception e) {
-                log.error("Sinkin processor error", e);
-
-                // khởi tạo lại socket cho chắc
-                subSocket.close();
-                dealerSocket.close();
-                subSocket = createSubSocket();
-                dealerSocket = createDealerSocket();
-                LockSupport.parkNanos(2_000_000_000L);
             }
-        }
 
-        subSocket.close();
-        dealerSocket.close();
-        appender.close();
-        bytes.releaseLast();
+            subSocket.close();
+            dealerSocket.close();
+            appender.close();
+            bytes.releaseLast();
+        }
     }
 
 
@@ -330,7 +331,7 @@ public class Sinkin {
     }
 
 
-    private ZMQ.Socket createSubSocket() {
+    private ZMQ.Socket createSubSocket(ZContext zContext) {
         ZMQ.Socket subSocket = zContext.createSocket(SocketType.SUB);
         subSocket.setRcvHWM(config.getZmqSubBufferSize());   // setting buffer size các msg được nhận
 
@@ -353,7 +354,7 @@ public class Sinkin {
         return subSocket;
     }
 
-    private ZMQ.Socket createDealerSocket() {
+    private ZMQ.Socket createDealerSocket(ZContext zContext) {
         ZMQ.Socket socket = zContext.createSocket(SocketType.DEALER);
         socket.setRcvHWM(10_000_000);
         socket.setHeartbeatIvl(30_000);
@@ -468,7 +469,6 @@ public class Sinkin {
         log.info("Sinkin closing...");
 
         status = SinkStatus.STOP;
-        zContext.destroy(); // close zeromq, ngừng nhận msg mới
         LockSupport.parkNanos(1_000_000_000);
         queue.close();
         messagePool.clear();
