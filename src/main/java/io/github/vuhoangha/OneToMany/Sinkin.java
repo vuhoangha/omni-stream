@@ -167,7 +167,7 @@ public class Sinkin {
 
                 // lấy latest_message / from_to_message
                 byte[] fetchingMessageBytes = dealerSocket.recv(ZMQ.NOBLOCK);
-                if (fetchingMessageBytes != null) {
+                if (fetchingMessageBytes != null && fetchingMessageBytes.length > 0) {
                     bytes.write(fetchingMessageBytes);
                     byte type = bytes.readByte();
                     if (type == Constance.FANOUT.FETCH.LATEST_MSG) {
