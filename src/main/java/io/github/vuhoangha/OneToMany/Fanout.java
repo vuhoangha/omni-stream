@@ -234,7 +234,6 @@ public class Fanout {
 
         if (startMoved) {
             // nếu hợp lệ thì lấy msg gửi về
-            bytesReply.writeByte(type);
             while (tailer.readBytes(bytesFromQueue)                                                  // còn msg trong queue để đọc
                     && ++readMsgCount <= config.getBatchSize()                                       // số lượng msg đã đọc chưa vượt quá giới hạn
                     && (type == Constance.FANOUT.FETCH.FROM_LATEST || nextReadIndex < toIndex)) {    // nếu là "FROM_LATEST" thì ko cần quan tâm "toIndex". Còn nếu là "FROM_TO" thì check xem đã đọc tới "toIndex" chưa
@@ -244,6 +243,8 @@ public class Fanout {
 
                 // dữ liệu ghi vào queue có dạng ["seq in queue"]["data"] --> "độ dài data" = "độ dài dữ liệu trong queue" - "độ dài kiểu long của seq in queue"
                 // 1 msg con trong có dạng: ["độ dài data"]["source native index"]["seq in queue"]["data"]
+                // check nếu là lần đầu ghi dữ liệu thì thêm giá trị "type" vào đầu
+                if (bytesReply.writePosition() == 0) bytesReply.writeByte(type);
                 bytesReply.writeInt((int) bytesFromQueue.writePosition() - 8);
                 bytesReply.writeLong(tailer.lastReadIndex());
                 bytesReply.write(bytesFromQueue);

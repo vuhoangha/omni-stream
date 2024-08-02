@@ -86,7 +86,7 @@ public class Sinkin {
 
                 // chờ dữ liệu trả về. Dữ liệu null hoặc chỉ chứa 1 byte duy nhất là "type" ở đầu chứng tỏ đã đồng bộ dữ liệu hoàn toàn
                 byte[] repData = socket.recv(0);
-                if (repData == null || repData.length <= 1) break;
+                if (repData == null || repData.length == 0) break;
 
                 log.info("Sinkin syncing......");
 
