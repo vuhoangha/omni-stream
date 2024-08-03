@@ -2,7 +2,6 @@ package io.github.vuhoangha.ManyToOne;
 
 import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.OmniWaitStrategy;
-import io.github.vuhoangha.OneToMany.SinkinCfg;
 import net.openhft.chronicle.queue.rollcycles.LargeRollCycles;
 
 import java.text.MessageFormat;

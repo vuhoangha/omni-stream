@@ -1,6 +1,5 @@
 package io.github.vuhoangha.Example;
 
-import io.github.vuhoangha.Common.Constance;
 import io.github.vuhoangha.Common.SinkinHandler;
 import io.github.vuhoangha.Common.Utils;
 import io.github.vuhoangha.Example.structure_example.AnimalTest;
@@ -27,7 +26,7 @@ public class OneToManyExample {
 
         Utils.deleteFolder(sourcePath);
 
-        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(sourcePath).setCompress(true));
+        Fanout fanout = new Fanout(FanoutConfig.standardConfig().setQueuePath(sourcePath).setCompress(true));
 
         int count = 1;
         AnimalTest animal = new AnimalTest(
@@ -59,7 +58,7 @@ public class OneToManyExample {
 
         Utils.deleteFolder(path);
 
-        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(path).setCompress(true));
+        Fanout fanout = new Fanout(FanoutConfig.standardConfig().setQueuePath(path).setCompress(true));
 
         int count = 1;
         AnimalTest animal = new AnimalTest(
@@ -94,7 +93,7 @@ public class OneToManyExample {
         AtomicInteger count = new AtomicInteger(0);
         new Thread(() -> {
             while (true) {
-                System.out.println("Rate " + count.get());
+                System.out.println("Rate received " + count.get());
                 count.set(0);
                 LockSupport.parkNanos(1_000_000_000L);
             }
@@ -112,13 +111,11 @@ public class OneToManyExample {
             System.out.println("Animal: " + animalTest);
         };
 
-        new Sinkin(SinkinCfg.builder()
+        new Sinkin(SinkinConfig.standardConfig()
                 .setQueuePath(path)
                 .setSourceIP("127.0.0.1")
                 .setReaderName("onus_spot_market_core")
                 .setStartId(-1L)
-                .setSubMsgCpu(Constance.CPU_TYPE.ANY)
-                .setDisruptorProcessMsgCpu(Constance.CPU_TYPE.ANY)
                 .setCompress(true), handler);
 
     }
@@ -129,31 +126,37 @@ public class OneToManyExample {
 
         Utils.deleteFolder(sourcePath);
 
-        Fanout fanout = new Fanout(FanoutCfg.defaultCfg().setQueuePath(sourcePath).setCompress(true));
+        Fanout fanout = new Fanout(FanoutConfig.standardConfig().setQueuePath(sourcePath).setCompress(true));
 
         LockSupport.parkNanos(5_000_000_000L);
 
+        AnimalTest animal = new AnimalTest(
+                1, // index
+                10L, // age
+                10L, // weight
+                10L, // height
+                20L, // speed
+                20L, // energy
+                20L, // strength
+                30L, // agility
+                30L, // intelligence
+                30L, // lifespan
+                100L, // offspring
+                100L  // territorySize
+        );
+
+        AtomicInteger count = new AtomicInteger(0);
+        new Thread(() -> {
+            while (true) {
+                System.out.println("Rate write " + count.getAndSet(0));
+                LockSupport.parkNanos(1_000_000_000L);
+            }
+        }).start();
 
         for (int i = 0; i < 100_000_000; i++) {
             for (int j = 0; j < 1; j++) {
-
-                int count = i + 1;
-                AnimalTest animal = new AnimalTest(
-                        count, // index
-                        count * 10L, // age
-                        count * 10L, // weight
-                        count * 10L, // height
-                        count * 20L, // speed
-                        count * 20L, // energy
-                        count * 20L, // strength
-                        count * 30L, // agility
-                        count * 30L, // intelligence
-                        count * 30L, // lifespan
-                        count * 100L, // offspring
-                        count * 100L  // territorySize
-                );
-
                 fanout.write(animal);
+                count.incrementAndGet();
             }
             LockSupport.parkNanos(500_000_000L);
         }

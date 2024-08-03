@@ -161,7 +161,6 @@ public class Anubis {
                                 sendMessage(socket, event, ++reqID, sendingBytes);
                                 nextSequence++;
                             }
-                            // TODO thử cập nhật nó cho từng item trong vòng lặp xem sao
                             sequence.set(availableSequence);    // đánh dấu đã xử lý tới event cuối cùng được ghi nhận
                         }
 
@@ -220,15 +219,15 @@ public class Anubis {
         // quét các message đã chờ quá lâu
         private void scanTimeoutMessage(long now) {
             IQueueNode<Long, Long> tail = messageExpiryTimes.getTail();
-                while (tail != null && tail.getValue() < now) {
-                    // phản hồi cho user là msg này bị timeout
-                    long reqId = tail.getKey();
-                    messageExpiryTimes.remove(reqId);
-                    Promise<Boolean> cb = messageCallbacks.remove(reqId);
-                    if (cb != null) cb.complete(false);
+            while (tail != null && tail.getValue() < now) {
+                // phản hồi cho user là msg này bị timeout
+                long reqId = tail.getKey();
+                messageExpiryTimes.remove(reqId);
+                Promise<Boolean> cb = messageCallbacks.remove(reqId);
+                if (cb != null) cb.complete(false);
 
-                    // reset tail
-                    tail = messageExpiryTimes.getTail();
+                // reset tail
+                tail = messageExpiryTimes.getTail();
             }
         }
 
