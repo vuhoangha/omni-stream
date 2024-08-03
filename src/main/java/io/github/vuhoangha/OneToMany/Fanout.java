@@ -262,13 +262,15 @@ public class Fanout {
 
 
     public void write(WriteBytesMarshallable event) {
-        event.writeMarshallable(eventBuffer);
-        write(eventBuffer);
-        eventBuffer.clear();
+        if (isRunning) {
+            event.writeMarshallable(eventBuffer);
+            write(eventBuffer);
+            eventBuffer.clear();
+        }
     }
 
     // dữ liệu ghi vào queue có dạng ["seq in queue"]["data"]
-    public void write(Bytes<?> eventData) {
+    private void write(Bytes<?> eventData) {
         try {
             queueBuffer.writeLong(++sequence);
 
