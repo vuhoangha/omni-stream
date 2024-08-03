@@ -70,7 +70,7 @@ public class FanoutConfig {
     // cho hiệu suất tốt nhất
     public static FanoutConfig bestPerformanceConfig() {
         return new FanoutConfig()
-                .setCore(true)
+                .setCore(false)
                 .setCpu(Constance.CPU_TYPE.NONE)
                 .setQueueListeningCore(true)
                 .setQueueListeningCpu(Constance.CPU_TYPE.NONE)
