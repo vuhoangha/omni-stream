@@ -18,18 +18,15 @@ public class OdinArtemisExample {
 
     public static void runOdin() {
         Odin odin = new Odin(
-                OdinConfig.getDefault()
+                OdinConfig.standardConfig()
         );
 
         int count = 0;
-        Bytes<ByteBuffer> data = Bytes.elasticByteBuffer();
         while (true) {
             count++;
             CarTest car = new CarTest(count, count + 1000);
             System.out.println("\n\uD83D\uDE80Send: " + car);
-            data.clear();
-            car.writeMarshallable(data);
-            odin.send(data);
+            odin.sendMessage(car);
             LockSupport.parkNanos(100_000_000L);
         }
     }
@@ -37,9 +34,8 @@ public class OdinArtemisExample {
 
     public static void runArtemis() {
         CarTest car = new CarTest();
-        ArtemisHandler onData = (long version, long seq, Bytes<ByteBuffer> data) -> {
+        ArtemisHandler onData = (long seq, Bytes<ByteBuffer> data) -> {
             System.out.println("\uD83D\uDCE9Received");
-            System.out.println("Version: " + version);
             System.out.println("Seq: " + seq);
             CarTest.reader(car, data);
             System.out.println("Car: " + car.toString());
@@ -47,15 +43,11 @@ public class OdinArtemisExample {
         Consumer<String> onInterrupt = (String reason) -> {
             System.out.println("\uD83D\uDCE9Interrupt: " + reason);
         };
-        Consumer<String> onWarning = (String reason) -> {
-            System.out.println("\uD83D\uDCE9Warning: " + reason);
-        };
 
         new Artemis(
-                ArtemisConfig.getDefault().setSourceIP("127.0.0.1"),
+                ArtemisConfig.standardConfig().setSourceIP("127.0.0.1"),
                 onData,
-                onInterrupt,
-                onWarning
+                onInterrupt
         );
     }
 

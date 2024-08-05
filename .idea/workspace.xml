@@ -5,9 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="818b36f8-e38c-424e-9c59-f4958314ad3a" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Common/Constance.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Common/Constance.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToMany/Fanout.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToMany/Fanout.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Example/OdinArtemisExample.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Example/OdinArtemisExample.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Main.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Main.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -48,7 +47,7 @@
     "RunOnceActivity.OpenProjectViewOnStart": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "SHARE_PROJECT_CONFIGURATION_FILES": "true",
-    "git-widget-placeholder": "new-fanout",
+    "git-widget-placeholder": "new__odin",
     "kotlin-language-version-configured": "true",
     "last_opened_file_path": "/Users/vuhoangha/Desktop/Kendrick/vndc/spot/omni-stream/src/main/java/io/github/vuhoangha/OneToManyStateless",
     "project.structure.last.edited": "Project",
@@ -64,13 +63,15 @@
       <recent name="$PROJECT_DIR$/src/main/resources" />
     </key>
     <key name="CopyClassDialog.RECENTS_KEY">
+      <recent name="io.github.vuhoangha.OneToManyStateless" />
       <recent name="io.github.vuhoangha.ManyToOneStateless" />
       <recent name="io.github.vuhoangha.Example" />
-      <recent name="io.github.vuhoangha.OneToManyStateless" />
     </key>
   </component>
   <component name="RunManager">
     <configuration name="Main" type="Application" factoryName="Application" temporary="true" nameIsGenerated="true">
+      <option name="ALTERNATIVE_JRE_PATH" value="21" />
+      <option name="ALTERNATIVE_JRE_PATH_ENABLED" value="true" />
       <option name="MAIN_CLASS_NAME" value="io.github.vuhoangha.Main" />
       <module name="omni-stream" />
       <option name="VM_PARAMETERS" value="--enable-preview --add-exports=java.base/jdk.internal.ref=ALL-UNNAMED --add-exports=java.base/sun.nio.ch=ALL-UNNAMED --add-exports=jdk.unsupported/sun.misc=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED --add-opens=jdk.compiler/com.sun.tools.javac=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED" />
