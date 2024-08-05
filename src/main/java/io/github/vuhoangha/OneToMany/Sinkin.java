@@ -332,7 +332,7 @@ public class Sinkin {
 
     private ZMQ.Socket createSubSocket() {
         ZMQ.Socket subSocket = zContext.createSocket(SocketType.SUB);
-        subSocket.setRcvHWM(config.getZmqSubBufferSize());   // setting buffer size các msg được nhận
+        subSocket.setRcvHWM(10_000_000);
 
         /*
          * setHeartbeatIvl: interval gửi heartbeat

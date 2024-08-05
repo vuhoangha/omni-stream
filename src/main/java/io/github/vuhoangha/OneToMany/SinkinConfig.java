@@ -32,9 +32,6 @@ public class SinkinConfig {
     // số lượng msg tối đa trong ObjectsPool dùng để chứa lại các message chờ xử lý
     private Integer messagePoolSize = 30_000;
 
-    // kích cỡ bộ đệm ZeroMQ SUB chứa các message đã nhận được nhưng chưa xử lý (số lượng message)
-    private Integer zmqSubBufferSize = 10_000_000;
-
     // thời gian định kỳ lấy message mới nhất từ Fanout (miliseconds)
     private Integer latestMessageFetchInterval = 3_000;
 

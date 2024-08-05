@@ -18,7 +18,7 @@ public class OdinArtemisExample {
 
     public static void runOdin() {
         Odin odin = new Odin(
-                OdinCfg.getDefault()
+                OdinConfig.getDefault()
         );
 
         int count = 0;
@@ -52,7 +52,7 @@ public class OdinArtemisExample {
         };
 
         new Artemis(
-                ArtemisCfg.getDefault().setSourceIP("127.0.0.1"),
+                ArtemisConfig.getDefault().setSourceIP("127.0.0.1"),
                 onData,
                 onInterrupt,
                 onWarning
