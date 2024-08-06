@@ -6,6 +6,6 @@ import java.nio.ByteBuffer;
 
 public interface ArtemisHandler {
 
-    void apply(long version, long seq, Bytes<ByteBuffer> data);
+    void apply(long sequence, Bytes<ByteBuffer> data);
 
 }

@@ -44,51 +44,57 @@ public class Saraswati {
     private void listenAnubis() {
         log.info("Saraswati listen Anubis on logical processor {}", Affinity.getCpu());
 
-        try (ZContext context = new ZContext();
-             ZMQ.Socket socket = context.createSocket(SocketType.ROUTER)) {
-            configSocket(socket);
+        ZContext zContext = new ZContext();
+        ZMQ.Socket socket = createRouterSocket(zContext);
+        Bytes<ByteBuffer> bytesReq = Bytes.elasticByteBuffer();     // tất cả dữ liệu gửi sang, cấu trúc ["time_to_live"]["req_id"]["data"]
 
-            Bytes<ByteBuffer> bytesReq = Bytes.elasticByteBuffer();     // tất cả dữ liệu gửi sang, cấu trúc ["time_to_live"]["req_id"]["data"]
+        while (status == SaraswatiStatus.RUNNING) {
+            try {
+                byte[] clientAddress = socket.recv(0);
+                byte[] request = socket.recv(0);
 
-            while (status == SaraswatiStatus.RUNNING) {
-                try {
-                    byte[] clientAddress = socket.recv(0);
-                    byte[] request = socket.recv(0);
+                bytesReq.write(request);
 
-                    bytesReq.write(request);
+                long expiry = bytesReq.readLong();
+                long reqId = bytesReq.readLong();
 
-                    long expiry = bytesReq.readLong();
-                    long reqId = bytesReq.readLong();
+                if (expiry >= System.currentTimeMillis()) {
+                    // msg còn hạn sử dụng --> gửi cho ứng dụng
+                    messageHandler.accept(bytesReq);
 
-                    if (expiry >= System.currentTimeMillis()) {
-                        // msg còn hạn sử dụng --> gửi cho ứng dụng
-                        messageHandler.accept(bytesReq);
-
-                        // phản hồi Anubis confirm nhận được
-                        socket.send(clientAddress, ZMQ.SNDMORE);
-                        socket.send(Utils.longToBytes(reqId), 0);
-                    } else {
-                        log.warn("The message {} has expired {}", reqId, expiry);
-                    }
-                } catch (Exception ex) {
-                    log.error("Saraswati listen Anubis error", ex);
-                } finally {
-                    bytesReq.clear();
+                    // phản hồi Anubis confirm nhận được
+                    socket.send(clientAddress, ZMQ.SNDMORE);
+                    socket.send(Utils.longToBytes(reqId), 0);
+                } else {
+                    log.warn("The message {} has expired {}", reqId, expiry);
                 }
-            }
+            } catch (Exception ex) {
+                log.error("Saraswati listen Anubis error", ex);
 
-            // close & release
-            bytesReq.releaseLast();
+                socket.close();
+                LockSupport.parkNanos(1_000_000_000L);
+                socket = createRouterSocket(zContext);
+                LockSupport.parkNanos(1_000_000_000L);
+            } finally {
+                bytesReq.clear();
+            }
         }
+
+        // close & release
+        socket.close();
+        zContext.destroy();
+        bytesReq.releaseLast();
     }
 
-    private void configSocket(ZMQ.Socket socket) {
+    private ZMQ.Socket createRouterSocket(ZContext zContext) {
+        ZMQ.Socket socket = zContext.createSocket(SocketType.ROUTER);
         socket.setRcvHWM(10_000_000);
         socket.setSndHWM(10_000_000);
         socket.setHeartbeatIvl(10_000);
         socket.setHeartbeatTtl(15_000);
         socket.setHeartbeatTimeout(15_000);
         socket.bind(config.getUrl());
+        return socket;
     }
 
     private void onShutdown() {

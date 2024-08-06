@@ -139,62 +139,66 @@ public class Anubis {
         public void run() {
             log.info("Anubis run Processor on logical processor {}", Affinity.getCpu());
 
+            ZContext zContext = new ZContext();
+            ZMQ.Socket socket = createDealerSocket(zContext);
             Runnable waiter = OmniWaitStrategy.getWaiter(config.getWaitStrategy());
             long nextSequence = sequence.get() + 1L;
             long reqID = System.currentTimeMillis();
             Bytes<ByteBuffer> sendingBytes = Bytes.elasticByteBuffer();
             long nextTimeoutCheckTime = System.currentTimeMillis() + TIMEOUT_CHECK_INTERVAL_MS;     // lần check message timeout tiếp theo
 
-            // khởi tạo socket
-            try (ZContext context = new ZContext();
-                 ZMQ.Socket socket = context.createSocket(SocketType.DEALER)) {
-                setupSocket(socket);
+            while (running) {
+                try {
 
-                while (running) {
-                    try {
-
-                        // xem có msg nào cần gửi đi ko
-                        long availableSequence = sequencer.getHighestPublishedSequence(nextSequence, ringBuffer.getCursor());     // lấy sequence được publish cuối cùng trong ring_buffer
-                        if (nextSequence <= availableSequence) {
-                            while (nextSequence <= availableSequence) {
-                                AnubisDisruptorEvent event = ringBuffer.get(nextSequence);
-                                sendMessage(socket, event, ++reqID, sendingBytes);
-                                nextSequence++;
-                            }
-                            sequence.set(availableSequence);    // đánh dấu đã xử lý tới event cuối cùng được ghi nhận
+                    // xem có msg nào cần gửi đi ko
+                    long availableSequence = sequencer.getHighestPublishedSequence(nextSequence, ringBuffer.getCursor());     // lấy sequence được publish cuối cùng trong ring_buffer
+                    if (nextSequence <= availableSequence) {
+                        while (nextSequence <= availableSequence) {
+                            AnubisDisruptorEvent event = ringBuffer.get(nextSequence);
+                            sendMessage(socket, event, ++reqID, sendingBytes);
+                            nextSequence++;
                         }
-
-                        // check xem có nhận đc msg mới không?
-                        while (true) {
-                            byte[] reply = socket.recv(ZMQ.NOBLOCK);
-                            if (reply != null) {
-                                // phản hồi cho ứng dụng là gửi thành công, bên Saraswati nhận được
-                                long successReqID = Utils.bytesToLong(reply);
-                                messageExpiryTimes.remove(successReqID);
-                                Promise<Boolean> cb = messageCallbacks.remove(successReqID);
-                                if (cb != null) cb.complete(true);
-                            } else {
-                                break;
-                            }
-                        }
-
-                        // check xem có msg nào timeout ko
-                        long now = System.currentTimeMillis();
-                        if (nextTimeoutCheckTime < now) {
-                            nextTimeoutCheckTime += TIMEOUT_CHECK_INTERVAL_MS;
-                            scanTimeoutMessage(now);
-                        }
-
-                        // cho CPU nghỉ ngơi 1 chút
-                        waiter.run();
-
-                    } catch (Exception ex) {
-                        log.error("Anubis process messages error", ex);
+                        sequence.set(availableSequence);    // đánh dấu đã xử lý tới event cuối cùng được ghi nhận
                     }
+
+                    // check xem có nhận đc msg mới không?
+                    while (true) {
+                        byte[] reply = socket.recv(ZMQ.NOBLOCK);
+                        if (reply != null) {
+                            // phản hồi cho ứng dụng là gửi thành công, bên Saraswati nhận được
+                            long successReqID = Utils.bytesToLong(reply);
+                            messageExpiryTimes.remove(successReqID);
+                            Promise<Boolean> cb = messageCallbacks.remove(successReqID);
+                            if (cb != null) cb.complete(true);
+                        } else {
+                            break;
+                        }
+                    }
+
+                    // check xem có msg nào timeout ko
+                    long now = System.currentTimeMillis();
+                    if (nextTimeoutCheckTime < now) {
+                        nextTimeoutCheckTime += TIMEOUT_CHECK_INTERVAL_MS;
+                        scanTimeoutMessage(now);
+                    }
+
+                    // cho CPU nghỉ ngơi 1 chút
+                    waiter.run();
+
+                } catch (Exception ex) {
+                    log.error("Anubis process messages error", ex);
+
+                    socket.close();
+                    sendingBytes.clear();
+                    LockSupport.parkNanos(1_000_000_000L);
+                    socket = createDealerSocket(zContext);
+                    LockSupport.parkNanos(1_000_000_000L);
                 }
-            } finally {
-                sendingBytes.releaseLast();
             }
+
+            socket.close();
+            zContext.destroy();
+            sendingBytes.releaseLast();
         }
 
         // gửi msg sang Saraswati
@@ -232,7 +236,8 @@ public class Anubis {
         }
 
 
-        private void setupSocket(ZMQ.Socket socket) {
+        private ZMQ.Socket createDealerSocket(ZContext zContext) {
+            ZMQ.Socket socket = zContext.createSocket(SocketType.DEALER);
             socket.setRcvHWM(10_000_000);
             socket.setHeartbeatIvl(30_000);
             socket.setHeartbeatTtl(45_000);
@@ -240,6 +245,7 @@ public class Anubis {
             socket.setReconnectIVL(10_000);
             socket.setReconnectIVLMax(10_000);
             socket.connect(config.getUrl());
+            return socket;
         }
 
         public void halt() {
