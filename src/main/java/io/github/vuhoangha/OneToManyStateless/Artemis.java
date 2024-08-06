@@ -71,62 +71,72 @@ public class Artemis {
 
         // bắt đầu xử lý realtime message
         while (status == ArtemisStatus.RUNNING) {
-            // lấy realtime message
-            while (true) {
-                byte[] realtimeBytes = subSocket.recv(ZMQ.NOBLOCK);
-                if (realtimeBytes != null) {
-                    bytes.write(realtimeBytes);
-                    processMessage(bytes);
-                    bytes.clear();
-                } else {
-                    break;
-                }
-            }
-
-            // lấy latest_message / from_to_message
-            byte[] fetchingMessageBytes = dealerSocket.recv(ZMQ.NOBLOCK);
-            if (fetchingMessageBytes != null && fetchingMessageBytes.length > 0) {
-                bytes.write(fetchingMessageBytes);
-                processMessage(bytes);
-                bytes.clear();
-            }
-
-            // định kỳ request xem có message nào mới không, đề phòng trường hợp subscriber message bị loss
-            if (nextLatestMessageFetchTime <= System.currentTimeMillis()) {
-                nextLatestMessageFetchTime += latestMessageFetchInterval;
-                // lấy ra sequence lớn nhất từng nhận được
-                long bigestReceivingSequence = currentSequence;
-                if (!pendingMessages.isEmpty()) {
-                    bigestReceivingSequence = Math.max(bigestReceivingSequence, pendingMessages.lastKey());
-                }
-                bytes.writeLong(bigestReceivingSequence);                                    // from
-                bytes.writeLong(bigestReceivingSequence + config.getMaxMessagesPerFetch());  // to
-                dealerSocket.send(bytes.toByteArray(), 0);
-                bytes.clear();
-            }
-
-            // định kỳ quét các msg bị miss
-            if (nextLostMessageScanTime <= System.currentTimeMillis()) {
-                nextLostMessageScanTime += lostMessageScanInterval;
-                if (!pendingMessages.isEmpty()) {
-                    PendingMessage msg = pendingMessages.firstEntry().getValue();
-                    long now = System.currentTimeMillis();
-                    if (msg.expiryTime + messageQueueTimeoutBeforeRestart < now) {
-                        // đã quá lâu mà không thể lấy các loss message --> cần restart để đồng bộ lại
-                        status = ArtemisStatus.STOP;
-                        interruptHandler.accept("Message wait so long");
-                        LockSupport.parkNanos(100_000_000L);
-                    } else if (msg.expiryTime < now) {
-                        // lấy các loss message
-                        bytes.writeLong(currentSequence + 1);
-                        bytes.writeLong(msg.sequence - 1);
-                        dealerSocket.send(bytes.toByteArray(), 0);
+            try {
+                // lấy realtime message
+                while (true) {
+                    byte[] realtimeBytes = subSocket.recv(ZMQ.NOBLOCK);
+                    if (realtimeBytes != null) {
+                        bytes.write(realtimeBytes);
+                        processMessage(bytes);
                         bytes.clear();
+                    } else {
+                        break;
                     }
                 }
-            }
 
-            waiter.run();
+                // lấy latest_message / from_to_message
+                byte[] fetchingMessageBytes = dealerSocket.recv(ZMQ.NOBLOCK);
+                if (fetchingMessageBytes != null && fetchingMessageBytes.length > 0) {
+                    bytes.write(fetchingMessageBytes);
+                    processMessage(bytes);
+                    bytes.clear();
+                }
+
+                // định kỳ request xem có message nào mới không, đề phòng trường hợp subscriber message bị loss
+                if (nextLatestMessageFetchTime <= System.currentTimeMillis()) {
+                    nextLatestMessageFetchTime += latestMessageFetchInterval;
+                    // lấy ra sequence lớn nhất từng nhận được
+                    long bigestReceivingSequence = currentSequence;
+                    if (!pendingMessages.isEmpty()) {
+                        bigestReceivingSequence = Math.max(bigestReceivingSequence, pendingMessages.lastKey());
+                    }
+                    bytes.writeLong(bigestReceivingSequence);                                    // from
+                    bytes.writeLong(bigestReceivingSequence + config.getMaxMessagesPerFetch());  // to
+                    dealerSocket.send(bytes.toByteArray(), 0);
+                    bytes.clear();
+                }
+
+                // định kỳ quét các msg bị miss
+                if (nextLostMessageScanTime <= System.currentTimeMillis()) {
+                    nextLostMessageScanTime += lostMessageScanInterval;
+                    if (!pendingMessages.isEmpty()) {
+                        PendingMessage msg = pendingMessages.firstEntry().getValue();
+                        long now = System.currentTimeMillis();
+                        if (msg.expiryTime + messageQueueTimeoutBeforeRestart < now) {
+                            // đã quá lâu mà không thể lấy các loss message --> cần restart để đồng bộ lại
+                            status = ArtemisStatus.STOP;
+                            interruptHandler.accept("Message wait so long");
+                            LockSupport.parkNanos(100_000_000L);
+                        } else if (msg.expiryTime < now) {
+                            // lấy các loss message
+                            bytes.writeLong(currentSequence + 1);
+                            bytes.writeLong(msg.sequence - 1);
+                            dealerSocket.send(bytes.toByteArray(), 0);
+                            bytes.clear();
+                        }
+                    }
+                }
+
+                waiter.run();
+            } catch (Exception ex) {
+                log.error("Artemis processor error", ex);
+                subSocket.close();
+                dealerSocket.close();
+                LockSupport.parkNanos(1_000_000_000L);
+                subSocket = createSubSocket(zContext);
+                dealerSocket = createDealerSocket(zContext);
+                LockSupport.parkNanos(1_000_000_000L);
+            }
         }
 
         subSocket.close();
