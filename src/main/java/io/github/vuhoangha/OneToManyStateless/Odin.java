@@ -169,9 +169,10 @@ public class Odin {
                     // ví dụ có [1,2,3,4,5,6], muốn lấy [3,4,5] thì cần gửi "sequence from": 3, "sequence to": 5
                     // dữ liệu trả về: [version][sequence_1][is_compressed_1][data_length_1][data_1][version][sequence_2][is_compressed_2][data_length_2][data_2]
                     while (true) {
-                        byte[] request = routerSocket.recv(ZMQ.NOBLOCK);
-                        if (request != null) {
+                        byte[] clientAddress = routerSocket.recv(ZMQ.NOBLOCK);
+                        if (clientAddress != null) {
                             // đọc thông tin request
+                            byte[] request = routerSocket.recv(0);
                             receivedBytes.write(request);
                             long sequenceFrom = receivedBytes.readLong();
                             long sequenceTo = receivedBytes.readLong();
@@ -182,6 +183,8 @@ public class Odin {
                                 byte[] bytes = recentEvents.getValue(currentSequence);
                                 if (bytes != null) sendingBytes.write(bytes);
                             }
+
+                            routerSocket.send(clientAddress, ZMQ.SNDMORE);
                             routerSocket.send(sendingBytes.toByteArray(), 0);
                             sendingBytes.clear();
                         } else {
