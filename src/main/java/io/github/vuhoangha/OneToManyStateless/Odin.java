@@ -178,15 +178,17 @@ public class Odin {
                             long sequenceTo = receivedBytes.readLong();
                             receivedBytes.clear();
 
-                            // giới hạn lại sequenceFrom, sequenceTo cho chuẩn
-                            sequenceFrom = Math.max(sequenceFrom, recentEvents.getTail().getKey());
-                            sequenceTo = Math.min(sequenceTo, recentEvents.getHead().getKey());
-                            sequenceTo = Math.min(sequenceTo, sequenceFrom + config.getMaxMessagesPerFetch());
+                            if (recentEvents.getSize() > 0) {
+                                // giới hạn lại sequenceFrom, sequenceTo cho chuẩn
+                                sequenceFrom = Math.max(sequenceFrom, recentEvents.getTail().getKey());
+                                sequenceTo = Math.min(sequenceTo, recentEvents.getHead().getKey());
+                                sequenceTo = Math.min(sequenceTo, sequenceFrom + config.getMaxMessagesPerFetch());
 
-                            // tổng hợp dữ liệu trả về
-                            for (long currentSequence = sequenceFrom; currentSequence <= sequenceTo; currentSequence++) {
-                                byte[] bytes = recentEvents.getValue(currentSequence);
-                                if (bytes != null) sendingBytes.write(bytes);
+                                // tổng hợp dữ liệu trả về
+                                for (long currentSequence = sequenceFrom; currentSequence <= sequenceTo; currentSequence++) {
+                                    byte[] bytes = recentEvents.getValue(currentSequence);
+                                    if (bytes != null) sendingBytes.write(bytes);
+                                }
                             }
 
                             routerSocket.send(clientAddress, ZMQ.SNDMORE);
