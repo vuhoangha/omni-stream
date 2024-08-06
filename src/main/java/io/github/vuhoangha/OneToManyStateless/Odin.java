@@ -194,6 +194,8 @@ public class Odin {
 
                 } catch (Exception ex) {
                     log.error("Odin process messages error", ex);
+                    receivedBytes.clear();
+                    sendingBytes.clear();
                     routerSocket.close();
                     pubSocket.close();
                     LockSupport.parkNanos(1_000_000_000L);
