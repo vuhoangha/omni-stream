@@ -145,6 +145,8 @@ public class Sinkin {
 
     // chạy luồng realtime và control message từ Fanout
     private void processor() {
+        log.info("Sinkin run processor on logical processor {}", Affinity.getCpu());
+
         ZMQ.Socket subSocket = createSubSocket();
         ZMQ.Socket dealerSocket = createDealerSocket();
         Bytes<ByteBuffer> bytes = Bytes.elasticByteBuffer();
@@ -208,9 +210,11 @@ public class Sinkin {
                 // khởi tạo lại socket cho chắc
                 subSocket.close();
                 dealerSocket.close();
+                bytes.clear();
+                LockSupport.parkNanos(1_000_000_000L);
                 subSocket = createSubSocket();
                 dealerSocket = createDealerSocket();
-                LockSupport.parkNanos(2_000_000_000L);
+                LockSupport.parkNanos(1_000_000_000L);
             }
         }
 

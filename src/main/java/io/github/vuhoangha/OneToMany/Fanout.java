@@ -118,8 +118,9 @@ public class Fanout {
 
                 // khởi tạo lại socket cho chắc
                 socket.close();
+                LockSupport.parkNanos(1_000_000_000L);
                 socket = createPubSocket();
-                LockSupport.parkNanos(500_000_000L);
+                LockSupport.parkNanos(1_000_000_000L);
             }
         }
 
@@ -170,6 +171,14 @@ public class Fanout {
                 byteReceived.clear();
             } catch (Exception ex) {
                 log.error("Fanout handle messages fetching request error", ex);
+
+                socket.close();
+                bytesFromQueue.clear();
+                byteReceived.clear();
+                bytesReply.clear();
+                LockSupport.parkNanos(1_000_000_000L);
+                socket = createRouterSocket();
+                LockSupport.parkNanos(1_000_000_000L);
             }
         }
 
