@@ -21,6 +21,9 @@ public class OdinConfig {
 
     private OmniWaitStrategy waitStrategy;
 
+    // số message tối đa muốn lấy trong 1 request fetch bởi DEALER
+    private int maxMessagesPerFetch = 10_000;
+
     // cấu hình core/cpu cho luồng chính
     private Boolean core;
     private Integer cpu;

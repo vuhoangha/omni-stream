@@ -91,11 +91,16 @@ public class Artemis {
                 bytes.clear();
             }
 
-            // định kỳ request latest message
+            // định kỳ request xem có message nào mới không, đề phòng trường hợp subscriber message bị loss
             if (nextLatestMessageFetchTime <= System.currentTimeMillis()) {
                 nextLatestMessageFetchTime += latestMessageFetchInterval;
-                bytes.writeLong(currentSequence);  // from
-                bytes.writeLong(currentSequence);  // to
+                // lấy ra sequence lớn nhất từng nhận được
+                long bigestReceivingSequence = currentSequence;
+                if (!pendingMessages.isEmpty()) {
+                    bigestReceivingSequence = Math.max(bigestReceivingSequence, pendingMessages.lastKey());
+                }
+                bytes.writeLong(bigestReceivingSequence);                                    // from
+                bytes.writeLong(bigestReceivingSequence + config.getMaxMessagesPerFetch());  // to
                 dealerSocket.send(bytes.toByteArray(), 0);
                 bytes.clear();
             }

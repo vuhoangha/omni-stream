@@ -37,7 +37,11 @@ public class ArtemisConfig {
     // nếu 1 msg đã nằm quá lâu trong hàng đợi chứng tỏ đã miss các msg trước đó, cần restart lại
     private int messageQueueTimeoutBeforeRestart = 120_000;
 
+    // kích cỡ object pool chứa các message pending
     private int messagePoolSize = 1_000_000;
+
+    // số message tối đa muốn lấy trong 1 request
+    private int maxMessagesPerFetch = 10_000;
 
     // toàn bộ hệ thống chạy trên 1 core/cpu riêng
     private Boolean core;
