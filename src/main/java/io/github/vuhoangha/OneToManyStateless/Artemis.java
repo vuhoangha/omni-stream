@@ -125,6 +125,8 @@ public class Artemis {
                     }
                 }
             }
+
+            waiter.run();
         }
 
         subSocket.close();
