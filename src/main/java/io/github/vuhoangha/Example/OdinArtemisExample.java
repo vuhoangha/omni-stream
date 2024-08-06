@@ -5,6 +5,7 @@ import io.github.vuhoangha.OneToManyStateless.*;
 import net.openhft.chronicle.bytes.Bytes;
 
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
 
@@ -15,6 +16,7 @@ public class OdinArtemisExample {
         LockSupport.parkNanos(2_000_000_000L);
         new Thread(OdinArtemisExample::runOdin).start();
     }
+
 
     public static void runOdin() {
         Odin odin = new Odin(
@@ -54,5 +56,62 @@ public class OdinArtemisExample {
         LockSupport.parkNanos(5_000_000_000L);
         artemis.startRealtimeData();
     }
+
+
+    public static void runBenchmark() {
+        new Thread(OdinArtemisExample::runArtemisBenchmark).start();
+        LockSupport.parkNanos(2_000_000_000L);
+        new Thread(OdinArtemisExample::runOdinBenchmark).start();
+    }
+
+
+    public static void runOdinBenchmark() {
+
+        AtomicInteger count = new AtomicInteger(0);
+        new Thread(() -> {
+            while (true) {
+                System.out.println("Rate sending " + count.getAndSet(0));
+                LockSupport.parkNanos(1_000_000_000L);
+            }
+        }).start();
+
+        Odin odin = new Odin(OdinConfig.standardConfig());
+
+        LockSupport.parkNanos(2_000_000_000L);
+
+        CarTest car = new CarTest(1, 1000);
+        while (true) {
+            odin.sendMessage(car);
+            count.incrementAndGet();
+        }
+    }
+
+
+    public static void runArtemisBenchmark() {
+
+        AtomicInteger count = new AtomicInteger(0);
+        new Thread(() -> {
+            while (true) {
+                System.out.println("Rate receiving " + count.getAndSet(0));
+                LockSupport.parkNanos(1_000_000_000L);
+            }
+        }).start();
+
+        ArtemisHandler onData = (long seq, Bytes<ByteBuffer> data) -> {
+            count.incrementAndGet();
+        };
+        Consumer<String> onInterrupt = (String reason) -> {
+            System.out.println("\uD83D\uDCE9Interrupt: " + reason);
+        };
+
+        Artemis artemis = new Artemis(
+                ArtemisConfig.standardConfig().setSourceIP("127.0.0.1"),
+                onData,
+                onInterrupt
+        );
+        LockSupport.parkNanos(5_000_000_000L);
+        artemis.startRealtimeData();
+    }
+
 
 }
