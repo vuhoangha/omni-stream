@@ -193,13 +193,13 @@ public class Odin {
                     waiter.run();
 
                 } catch (Exception ex) {
+                    log.error("Odin process messages error", ex);
                     routerSocket.close();
                     pubSocket.close();
+                    LockSupport.parkNanos(1_000_000_000L);
                     routerSocket = createRouterSocket(zContext);
                     pubSocket = createPubSocket(zContext);
                     LockSupport.parkNanos(1_000_000_000L);
-
-                    log.error("Anubis process messages error", ex);
                 }
             }
 

@@ -5,6 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="818b36f8-e38c-424e-9c59-f4958314ad3a" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Example/OdinArtemisExample.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Example/OdinArtemisExample.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Main.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Main.java" afterDir="false" />
     </list>
@@ -39,7 +40,7 @@
   </component>
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
-    "Application.Main.executor": "Run",
+    "Application.Main.executor": "Debug",
     "Maven.omni-stream [clean].executor": "Run",
     "Maven.omni-stream [install].executor": "Run",
     "Notification.DisplayName-DoNotAsk-Lombok plugin": "Lombok integration problem",
@@ -50,9 +51,9 @@
     "git-widget-placeholder": "new__odin",
     "kotlin-language-version-configured": "true",
     "last_opened_file_path": "/Users/vuhoangha/Desktop/Kendrick/vndc/spot/omni-stream/src/main/java/io/github/vuhoangha/OneToManyStateless",
-    "project.structure.last.edited": "Project",
-    "project.structure.proportion": "0.0",
-    "project.structure.side.proportion": "0.0",
+    "project.structure.last.edited": "Artifacts",
+    "project.structure.proportion": "0.15",
+    "project.structure.side.proportion": "0.2",
     "settings.editor.selected.configurable": "preferences.lookFeel"
   }
 }]]></component>
@@ -144,6 +145,26 @@
           <url>file://$PROJECT_DIR$/src/main/java/io/github/vuhoangha/ManyToOneStateless/Anubis.java</url>
           <line>222</line>
           <option name="timeStamp" value="17" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/Artemis.java</url>
+          <line>110</line>
+          <option name="timeStamp" value="22" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/Artemis.java</url>
+          <line>124</line>
+          <option name="timeStamp" value="23" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/Odin.java</url>
+          <line>220</line>
+          <option name="timeStamp" value="34" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToManyStateless/Odin.java</url>
+          <line>230</line>
+          <option name="timeStamp" value="35" />
         </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>

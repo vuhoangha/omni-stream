@@ -21,13 +21,15 @@ public class OdinArtemisExample {
                 OdinConfig.standardConfig()
         );
 
+        LockSupport.parkNanos(2_000_000_000L);
+
         int count = 0;
         while (true) {
             count++;
             CarTest car = new CarTest(count, count + 1000);
             System.out.println("\n\uD83D\uDE80Send: " + car);
             odin.sendMessage(car);
-            LockSupport.parkNanos(100_000_000L);
+            LockSupport.parkNanos(1_000_000_000L);
         }
     }
 
@@ -44,11 +46,13 @@ public class OdinArtemisExample {
             System.out.println("\uD83D\uDCE9Interrupt: " + reason);
         };
 
-        new Artemis(
+        Artemis artemis = new Artemis(
                 ArtemisConfig.standardConfig().setSourceIP("127.0.0.1"),
                 onData,
                 onInterrupt
         );
+        LockSupport.parkNanos(5_000_000_000L);
+        artemis.startRealtimeData();
     }
 
 }
