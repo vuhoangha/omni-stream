@@ -6,6 +6,7 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.experimental.Accessors;
 import lombok.extern.slf4j.Slf4j;
+import net.openhft.affinity.Affinity;
 import net.openhft.chronicle.bytes.Bytes;
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
@@ -55,6 +56,9 @@ public class Artemis {
 
 
     private void processor() {
+
+        log.info("Artemis processor run on logical processor {}", Affinity.getCpu());
+
         ZContext zContext = new ZContext();
         ZMQ.Socket subSocket = createSubSocket(zContext);
         ZMQ.Socket dealerSocket = createDealerSocket(zContext);
