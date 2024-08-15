@@ -6,11 +6,13 @@
 
     <groupId>io.github.vuhoangha</groupId>
     <artifactId>omni-stream</artifactId>
-    <version>1.0.21</version>
+    <version>1.0.22</version>
     <packaging>jar</packaging>
 
     <name>Omni Stream</name>
-    <description>Flow seamlessly into the future with OmniStream, where data synchronizes as smoothly as the river of enlightenment.</description>
+    <description>Flow seamlessly into the future with OmniStream, where data synchronizes as smoothly as the river of
+        enlightenment.
+    </description>
     <url>https://github.com/vuhoangha/omni-stream</url>
 
     <licenses>
@@ -70,23 +72,21 @@
         </dependency>
 
 
-        <!-- SLF4J API -->
+        <!--    LOG        -->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
-            <version>1.7.36</version>
+            <version>2.0.16</version>
         </dependency>
-        <!-- Logback Classic Implementation -->
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
-            <version>1.2.11</version>
+            <version>1.5.6</version>
         </dependency>
-        <!-- Logback Core Module -->
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-core</artifactId>
-            <version>1.2.11</version>
+            <version>1.5.6</version>
         </dependency>
 
         <!-- Lombok -->
@@ -101,7 +101,7 @@
         <dependency>
             <groupId>io.github.vuhoangha</groupId>
             <artifactId>omni-collection</artifactId>
-            <version>1.0.28</version>
+            <version>1.0.30</version>
         </dependency>
 
         <!--    LZ4    -->

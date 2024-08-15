@@ -5,9 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="818b36f8-e38c-424e-9c59-f4958314ad3a" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Example/OdinArtemisExample.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Example/OdinArtemisExample.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Main.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/Main.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pom.xml" beforeDir="false" afterPath="$PROJECT_DIR$/pom.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/resources/logback.xml" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -48,7 +47,7 @@
     "RunOnceActivity.OpenProjectViewOnStart": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "SHARE_PROJECT_CONFIGURATION_FILES": "true",
-    "git-widget-placeholder": "new__odin",
+    "git-widget-placeholder": "main",
     "kotlin-language-version-configured": "true",
     "last_opened_file_path": "/Users/vuhoangha/Desktop/Kendrick/vndc/spot/omni-stream/src/main/java/io/github/vuhoangha/OneToManyStateless",
     "project.structure.last.edited": "Artifacts",
