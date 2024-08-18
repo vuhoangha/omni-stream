@@ -167,18 +167,17 @@ public class Fanout {
                     // lấy msg từ from --> to
                     getMessagesFromTo(type, tailer, socket, clientAddress, byteReceived, bytesFromQueue, bytesReply);
                 }
-
-                byteReceived.clear();
             } catch (Exception ex) {
                 log.error("Fanout handle messages fetching request error", ex);
 
                 socket.close();
-                bytesFromQueue.clear();
-                byteReceived.clear();
-                bytesReply.clear();
                 LockSupport.parkNanos(1_000_000_000L);
                 socket = createRouterSocket();
                 LockSupport.parkNanos(1_000_000_000L);
+            } finally {
+                bytesFromQueue.clear();
+                byteReceived.clear();
+                bytesReply.clear();
             }
         }
 
@@ -206,8 +205,6 @@ public class Fanout {
             bytesReply.write(bytesFromQueue);
             socket.send(clientAddress, ZMQ.SNDMORE);
             socket.send(bytesReply.toByteArray(), 0);
-            bytesFromQueue.clear();
-            bytesReply.clear();
         } else {
             // vị trí hiện tại ko có dữ liệu
             socket.send(clientAddress, ZMQ.SNDMORE);
@@ -261,7 +258,6 @@ public class Fanout {
             }
             socket.send(clientAddress, ZMQ.SNDMORE);
             socket.send(bytesReply.toByteArray(), 0);
-            bytesReply.clear();
         } else {
             // nếu ko hợp lệ thì gửi về dữ liệu rỗng
             socket.send(clientAddress, ZMQ.SNDMORE);
