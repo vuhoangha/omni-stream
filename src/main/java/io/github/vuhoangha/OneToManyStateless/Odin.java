@@ -32,7 +32,7 @@ public class Odin {
     private static final int RING_BUFFER_SIZE = 2048;
 
     private boolean isRunning = true;
-    private long sequence = 0;
+    private long sequence;
     private final OdinConfig config;
     private final Processor processor;
     private final Disruptor<WrapMessage> disruptor;
@@ -41,7 +41,8 @@ public class Odin {
     private final long version = System.nanoTime();
     private final List<AffinityCompose> threadGroups = Collections.synchronizedList(new ArrayList<>());
 
-    public Odin(OdinConfig config) {
+    public Odin(OdinConfig config, long startedSequence) {
+        this.sequence = startedSequence;
         this.config = config;
         disruptor = new Disruptor<>(
                 WrapMessage::new,

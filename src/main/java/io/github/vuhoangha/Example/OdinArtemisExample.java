@@ -19,9 +19,7 @@ public class OdinArtemisExample {
 
 
     public static void runOdin() {
-        Odin odin = new Odin(
-                OdinConfig.standardConfig()
-        );
+        Odin odin = new Odin(OdinConfig.standardConfig(), 0);
 
         LockSupport.parkNanos(2_000_000_000L);
 
@@ -75,7 +73,7 @@ public class OdinArtemisExample {
             }
         }).start();
 
-        Odin odin = new Odin(OdinConfig.standardConfig());
+        Odin odin = new Odin(OdinConfig.standardConfig(), 0);
 
         LockSupport.parkNanos(2_000_000_000L);
 
