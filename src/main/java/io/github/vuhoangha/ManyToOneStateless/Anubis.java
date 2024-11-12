@@ -76,6 +76,43 @@ public class Anubis {
         }
     }
 
+
+    // gửi đi một list message có 1 message duy nhất
+    public void sendListWithSingleMessageAsync(WriteBytesMarshallable data, Promise<Boolean> cb) {
+        try {
+            // gửi sang luồng chính để gửi cho core
+            ringBuffer.publishEvent((newEvent, sequence, __data, __cb, __sendingTime) -> {
+                newEvent.bytes.writeInt(1);
+                __data.writeMarshallable(newEvent.bytes);
+                newEvent.callback = __cb;
+                newEvent.sendingTime = __sendingTime;
+            }, data, cb, System.currentTimeMillis());
+        } catch (Exception ex) {
+            log.error("Anubis send error, data {}", data.toString(), ex);
+            cb.completeWithException(ex);
+        }
+    }
+
+
+    // gửi đi một list message
+    public void sendListMessageAsync(List<WriteBytesMarshallable> data, Promise<Boolean> cb) {
+        try {
+            // gửi sang luồng chính để gửi cho core
+            ringBuffer.publishEvent((newEvent, sequence, __data, __cb, __sendingTime) -> {
+                newEvent.bytes.writeInt(__data.size());
+                for (WriteBytesMarshallable dataItem : __data) {
+                    dataItem.writeMarshallable(newEvent.bytes);
+                }
+                newEvent.callback = __cb;
+                newEvent.sendingTime = __sendingTime;
+            }, data, cb, System.currentTimeMillis());
+        } catch (Exception ex) {
+            log.error("Anubis send error, data {}", data.toString(), ex);
+            cb.completeWithException(ex);
+        }
+    }
+
+
     public boolean sendMessage(WriteBytesMarshallable data, Promise<Boolean> cb, long timeInterval) {
         try {
             sendMessageAsync(data, cb);

@@ -6,7 +6,7 @@
 
     <groupId>io.github.vuhoangha</groupId>
     <artifactId>omni-stream</artifactId>
-    <version>1.0.25</version>
+    <version>1.0.26</version>
     <packaging>jar</packaging>
 
     <name>Omni Stream</name>

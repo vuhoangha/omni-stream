@@ -16,6 +16,11 @@ public class CarTest implements WriteBytesMarshallable {
 
     private int age;
 
+    public CarTest(Bytes<ByteBuffer> bytes) {
+        id = bytes.readInt();
+        age = bytes.readInt();
+    }
+
     @Override
     public void writeMarshallable(BytesOut bytes) {
         bytes.writeInt(id);
