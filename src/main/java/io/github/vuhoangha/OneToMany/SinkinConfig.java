@@ -32,6 +32,11 @@ public class SinkinConfig {
     // số lượng msg tối đa trong ObjectsPool dùng để chứa lại các message chờ xử lý
     private Integer messagePoolSize = 30_000;
 
+    // ban đầu khi sync msg từ queue thì phải sync hoàn toàn thì mới chạy luồng realtime được. Nhưng khi có nhiều msg liên tiếp thì việc đạt sync hoàn toàn
+    //     là rất khó. Vậy nên khi lượng msg lấy về trong 1 lần ít hơn 1 mức giới hạn nhất định thì sẽ coi là nó đã đồng bộ hoàn toàn
+    //     ví dụ Fanout cho lấy tối đa 5_000_000 msg FROM-TO thì khi Sinkin lấy về được có 10_000 msg thì sẽ coi như đã đồng bộ hoàn toàn
+    private long numberMsgRetrievedBelowConsiderQueueSynced = 50_000;
+
     // thời gian định kỳ lấy message mới nhất từ Fanout (miliseconds)
     private Integer latestMessageFetchInterval = 3_000;
 

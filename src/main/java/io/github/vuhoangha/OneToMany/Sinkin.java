@@ -90,6 +90,8 @@ public class Sinkin {
 
                 log.info("Sinkin syncing......");
 
+                long beforeLatestWriteSequence = latestWriteSequence;
+
                 // đọc tuần tự và xử lý
                 byteResponse.write(repData);
                 byteResponse.readSkip(1);   // "type" ko cần nên bỏ qua
@@ -112,6 +114,11 @@ public class Sinkin {
                     byteToQueue.clear();
                 }
                 byteResponse.clear();
+
+                // check xem hệ thống đã đồng bộ hoàn toàn chưa
+                if (latestWriteSequence - beforeLatestWriteSequence <= config.getNumberMsgRetrievedBelowConsiderQueueSynced()) {
+                    break;
+                }
             }
 
             log.info("Sinkin synced");
