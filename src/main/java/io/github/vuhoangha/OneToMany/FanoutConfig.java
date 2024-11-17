@@ -24,7 +24,7 @@ public class FanoutConfig {
     private Integer fetchingPort = 5556;
 
     // số lượng msg tối đa gửi "src" --> "sink" trong 1 lần lấy các msg from --> to
-    private Integer batchSize = 20_000;
+    private Integer batchSize = 5_000_000;
 
     // kiểu WaitStrategy được sử dụng lắng nghe các message được ghi vào queue
     private OmniWaitStrategy queueWaitStrategy;
