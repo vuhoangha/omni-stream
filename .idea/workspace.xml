@@ -6,8 +6,6 @@
   <component name="ChangeListManager">
     <list default="true" id="818b36f8-e38c-424e-9c59-f4958314ad3a" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToMany/Sinkin.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToMany/Sinkin.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToMany/SinkinConfig.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/io/github/vuhoangha/OneToMany/SinkinConfig.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -127,7 +125,8 @@
       <workItem from="1722182899035" duration="367000" />
       <workItem from="1724062480576" duration="1559000" />
       <workItem from="1731809328411" duration="1597000" />
-      <workItem from="1731812240494" duration="1510000" />
+      <workItem from="1731812240494" duration="1643000" />
+      <workItem from="1731844156744" duration="709000" />
     </task>
     <servers />
   </component>
